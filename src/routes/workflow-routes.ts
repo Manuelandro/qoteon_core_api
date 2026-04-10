@@ -108,39 +108,54 @@ export async function register_workflow_routes(
   app.post("/projects/:project_id/runs/baseline", async (request, reply) => {
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(launch_run_request_schema, request.body);
-    const result = await services.orchestration_service.launch_baseline_scan(
-      request.current_user.user_id,
-      params.project_id,
-      body.ai_model_ids,
-      body.metadata_json,
-    );
+    const result = await services.workflow_request_service.launch_baseline_scan({
+      user_id: request.current_user.user_id,
+      project_id: params.project_id,
+      ai_model_ids: body.ai_model_ids,
+      metadata_json: body.metadata_json,
+      idempotency_key: parse_idempotency_key(request.headers["idempotency-key"]),
+    });
 
-    return reply.code(201).send(result);
+    if (result.replayed) {
+      reply.header("x-idempotent-replay", "true");
+    }
+
+    return reply.code(result.response_status_code).send(result.response_body);
   });
 
   app.post("/projects/:project_id/runs/monthly-tracking", async (request, reply) => {
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(launch_run_request_schema, request.body);
-    const result = await services.orchestration_service.launch_monthly_tracking(
-      request.current_user.user_id,
-      params.project_id,
-      body.ai_model_ids,
-      body.metadata_json,
-    );
+    const result = await services.workflow_request_service.launch_monthly_tracking({
+      user_id: request.current_user.user_id,
+      project_id: params.project_id,
+      ai_model_ids: body.ai_model_ids,
+      metadata_json: body.metadata_json,
+      idempotency_key: parse_idempotency_key(request.headers["idempotency-key"]),
+    });
 
-    return reply.code(201).send(result);
+    if (result.replayed) {
+      reply.header("x-idempotent-replay", "true");
+    }
+
+    return reply.code(result.response_status_code).send(result.response_body);
   });
 
   app.post("/projects/:project_id/source-intelligence/crawl-runs", async (request, reply) => {
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(source_intelligence_crawl_request_schema, request.body);
-    const result = await services.orchestration_service.trigger_project_crawl(
-      request.current_user.user_id,
-      params.project_id,
-      body,
-    );
+    const result = await services.workflow_request_service.trigger_project_crawl({
+      user_id: request.current_user.user_id,
+      project_id: params.project_id,
+      crawl_payload: body,
+      idempotency_key: parse_idempotency_key(request.headers["idempotency-key"]),
+    });
 
-    return reply.code(201).send(result);
+    if (result.replayed) {
+      reply.header("x-idempotent-replay", "true");
+    }
+
+    return reply.code(result.response_status_code).send(result.response_body);
   });
 
   app.get("/projects/:project_id/source-intelligence/crawl-runs", async (request) => {
@@ -221,4 +236,16 @@ export async function register_workflow_routes(
       params.execution_id,
     );
   });
+}
+
+function parse_idempotency_key(header_value: string | string[] | undefined): string | undefined {
+  if (typeof header_value === "string") {
+    return header_value;
+  }
+
+  if (Array.isArray(header_value) && header_value.length > 0) {
+    return header_value[0];
+  }
+
+  return undefined;
 }

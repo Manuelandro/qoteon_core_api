@@ -16,6 +16,7 @@ import { OrganizationRepository } from "./repositories/organization-repository";
 import { PostgresOrganizationRepository } from "./repositories/postgres-organization-repository";
 import { PostgresProjectRepository } from "./repositories/postgres-project-repository";
 import { PostgresUserRepository } from "./repositories/postgres-user-repository";
+import { PostgresWorkflowIdempotencyRepository } from "./repositories/postgres-workflow-idempotency-repository";
 import { ProjectRepository } from "./repositories/project-repository";
 import { UserRepository } from "./repositories/user-repository";
 import { AuthService, StubAuthService, SupabaseAuthService } from "./services/auth-service";
@@ -23,6 +24,10 @@ import { DashboardService } from "./services/dashboard-service";
 import { OrchestrationService } from "./services/orchestration-service";
 import { OrganizationService } from "./services/organization-service";
 import { ProjectService } from "./services/project-service";
+import {
+  PostgresWorkflowConcurrencyGuard,
+  WorkflowRequestService,
+} from "./services/workflow-request-service";
 
 export interface AppServices {
   auth_service: AuthService;
@@ -30,6 +35,7 @@ export interface AppServices {
   project_service: ProjectService;
   dashboard_service: DashboardService;
   orchestration_service: OrchestrationService;
+  workflow_request_service: WorkflowRequestService;
 }
 
 export interface AppRuntime {
@@ -110,6 +116,18 @@ export function create_app_services(env: Env, pool: Pool): AppServices {
     source_intelligence_client,
     dashboard_service,
   );
+  const workflow_idempotency_repository = new PostgresWorkflowIdempotencyRepository(pool);
+  const workflow_concurrency_guard = new PostgresWorkflowConcurrencyGuard(pool);
+  const workflow_request_service = new WorkflowRequestService(
+    orchestration_service,
+    workflow_idempotency_repository,
+    workflow_concurrency_guard,
+    {
+      explicit_idempotency_ttl_seconds: env.CORE_IDEMPOTENCY_EXPLICIT_TTL_SECONDS,
+      implicit_idempotency_ttl_seconds: env.CORE_IDEMPOTENCY_IMPLICIT_TTL_SECONDS,
+      require_idempotency_header: env.CORE_IDEMPOTENCY_REQUIRE_HEADER,
+    },
+  );
 
   return {
     auth_service,
@@ -117,5 +135,6 @@ export function create_app_services(env: Env, pool: Pool): AppServices {
     project_service,
     dashboard_service,
     orchestration_service,
+    workflow_request_service,
   };
 }

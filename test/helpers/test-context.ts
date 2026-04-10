@@ -7,6 +7,7 @@ import { OrchestrationService } from "../../src/services/orchestration-service";
 import { OrganizationService } from "../../src/services/organization-service";
 import { ProjectService } from "../../src/services/project-service";
 import { AppServices } from "../../src/build-services";
+import { InMemoryWorkflowIdempotencyRepository } from "../../src/repositories/in-memory-workflow-idempotency-repository";
 import {
   InMemoryOrganizationRepository,
   InMemoryProjectRepository,
@@ -17,6 +18,10 @@ import {
   FakePromptRunnerClient,
   FakeSourceIntelligenceClient,
 } from "../fakes/fake-clients";
+import {
+  InMemoryWorkflowConcurrencyGuard,
+  WorkflowRequestService,
+} from "../../src/services/workflow-request-service";
 
 export function create_test_context() {
   const organization_repository = new InMemoryOrganizationRepository();
@@ -40,6 +45,16 @@ export function create_test_context() {
     source_intelligence_client,
     dashboard_service,
   );
+  const workflow_request_service = new WorkflowRequestService(
+    orchestration_service,
+    new InMemoryWorkflowIdempotencyRepository(),
+    new InMemoryWorkflowConcurrencyGuard(),
+    {
+      explicit_idempotency_ttl_seconds: 60,
+      implicit_idempotency_ttl_seconds: 5,
+      require_idempotency_header: false,
+    },
+  );
 
   const services: AppServices = {
     auth_service: new StubAuthService(),
@@ -47,6 +62,7 @@ export function create_test_context() {
     project_service,
     dashboard_service,
     orchestration_service,
+    workflow_request_service,
   };
 
   return {
@@ -61,12 +77,13 @@ export function create_test_context() {
       source_intelligence_client,
       dashboard_layer_client,
     },
-    async build_app() {
+    async build_app(env_overrides: Record<string, string> = {}) {
       const app = build_app({
         logger: false,
         env: read_env({
           AUTH_MODE: "stub",
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres",
+          ...env_overrides,
         }),
         services,
       });

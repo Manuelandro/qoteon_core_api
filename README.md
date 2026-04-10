@@ -17,6 +17,9 @@ Production-minded Core API / orchestration service for Qoteon.
   - automatic post-crawl prompt generation owned by Prompt Library after Source Intelligence readiness notification, with manual regeneration still available through Core
   - crawl-target bootstrap and crawl-run orchestration through Source Intelligence
   - run launch orchestration through Prompt Runner
+  - edge-facing admission controls with route-aware rate limiting and backpressure `429` responses for hot POST routes
+  - per-user and per-project concurrency guards for run launch and crawl trigger workflows
+  - workflow idempotency for run launch and crawl trigger routes, with replay support
   - dashboard portfolio, overview, KPI, trend, and run-result proxy routes through Dashboard Layer
   - project-level source-intelligence status, persisted client crawl pass flags, prompt-context readiness, and prompt-context read routes
   - partial-success handling when downstream orchestration fails after project creation
@@ -102,6 +105,7 @@ If your Render services expose different paths behind those internal hosts, upda
 ## Render deployment notes
 
 - Deploy the Core API, Source Intelligence, Prompt Library, Prompt Runner API, and Dashboard Layer into the same Render private network.
+- Put Core behind an external WAF/CDN or reverse proxy with DDoS protection (for example Cloudflare, Fastly, or Render edge protections). App-level guards are additive, not a replacement for perimeter protection.
 - The Core API expects to reach Source Intelligence at `qoteon-source-intelligence-api:3000`.
 - The Core API expects to reach Prompt Library at `qoteon-prompt-library:3000`.
 - The Core API expects to reach Prompt Runner API at `qoteon-prompt-runner-api:3000`.
@@ -455,6 +459,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
   - `target_scope` may be `client`, `competitors`, or `all`.
   - `scope_type` may be `full`, `incremental`, or `single_url`.
   - `competitor_ids` and `single_url` are optional advanced filters.
+  - `Idempotency-Key` is supported and strongly recommended. Repeating the same key with the same payload returns the stored response and sets `x-idempotent-replay: true`.
 - What it does: validates project access and asks Source Intelligence to enqueue crawl runs for the project. Use this route when prompt context reports `client_website_crawl_status=not_passed` and you want to retry the client crawl later.
 
 #### `GET /projects/:project_id/source-intelligence/crawl-runs`
@@ -519,6 +524,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
 - Notes:
   - `ai_model_ids` is required and must contain at least one model id.
   - `metadata_json` is optional.
+  - `Idempotency-Key` is supported and strongly recommended. Repeating the same key with the same payload returns the stored response and sets `x-idempotent-replay: true`.
 - What it does:
   - Validates project access.
   - Fetches the `baseline` prompt set from Prompt Library.
@@ -549,6 +555,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
 - Notes:
   - `ai_model_ids` is required and must contain at least one model id.
   - `metadata_json` is optional.
+  - `Idempotency-Key` is supported and strongly recommended. Repeating the same key with the same payload returns the stored response and sets `x-idempotent-replay: true`.
 - What it does:
   - Validates project access.
   - Fetches the `monthly_tracking` prompt set from Prompt Library.
@@ -734,6 +741,7 @@ Tables created:
 - `public.core_organization_users`
 - `public.core_projects`
 - `public.core_project_competitors`
+- `public.core_workflow_idempotency`
 
 ## Commands
 
@@ -763,6 +771,22 @@ PROMPT_LIBRARY_BASE_URL=http://qoteon-prompt-library:3000
 PROMPT_LIBRARY_AUTH_TOKEN=
 PROMPT_RUNNER_BASE_URL=http://qoteon-prompt-runner-api:3000
 PROMPT_RUNNER_AUTH_TOKEN=
+```
+
+Core protection env vars:
+
+```bash
+CORE_TRUST_PROXY=true
+CORE_RATE_LIMIT_WINDOW_MS=60000
+CORE_RATE_LIMIT_DEFAULT_MAX=240
+CORE_RATE_LIMIT_PROJECT_CREATE_MAX=20
+CORE_RATE_LIMIT_RUN_LAUNCH_MAX=30
+CORE_RATE_LIMIT_CRAWL_TRIGGER_MAX=30
+CORE_BACKPRESSURE_MAX_IN_FLIGHT=120
+CORE_BACKPRESSURE_MAX_IN_FLIGHT_CRITICAL=24
+CORE_IDEMPOTENCY_EXPLICIT_TTL_SECONDS=86400
+CORE_IDEMPOTENCY_IMPLICIT_TTL_SECONDS=45
+CORE_IDEMPOTENCY_REQUIRE_HEADER=false
 ```
 
 Auth env vars are only needed when `AUTH_MODE=supabase`:

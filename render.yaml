@@ -14,6 +14,8 @@ services:
         value: 0.0.0.0
       - key: PORT
         value: "10000"
+      - key: CORE_TRUST_PROXY
+        value: "true"
       - key: AUTH_MODE
         value: supabase
       - key: DATABASE_URL
@@ -30,6 +32,10 @@ services:
         value: http://qoteon-prompt-library:3000
       - key: PROMPT_LIBRARY_AUTH_TOKEN
         sync: false
+      - key: SOURCE_INTELLIGENCE_BASE_URL
+        value: http://qoteon-source-intelligence-api:3000
+      - key: SOURCE_INTELLIGENCE_AUTH_TOKEN
+        sync: false
       - key: PROMPT_RUNNER_BASE_URL
         value: http://qoteon-prompt-runner-api:3000
       - key: PROMPT_RUNNER_AUTH_TOKEN
@@ -38,3 +44,23 @@ services:
         value: http://qoteon-dashboard-layer:4020
       - key: DASHBOARD_LAYER_AUTH_TOKEN
         sync: false
+      - key: CORE_RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: CORE_RATE_LIMIT_DEFAULT_MAX
+        value: "240"
+      - key: CORE_RATE_LIMIT_PROJECT_CREATE_MAX
+        value: "20"
+      - key: CORE_RATE_LIMIT_RUN_LAUNCH_MAX
+        value: "30"
+      - key: CORE_RATE_LIMIT_CRAWL_TRIGGER_MAX
+        value: "30"
+      - key: CORE_BACKPRESSURE_MAX_IN_FLIGHT
+        value: "120"
+      - key: CORE_BACKPRESSURE_MAX_IN_FLIGHT_CRITICAL
+        value: "24"
+      - key: CORE_IDEMPOTENCY_EXPLICIT_TTL_SECONDS
+        value: "86400"
+      - key: CORE_IDEMPOTENCY_IMPLICIT_TTL_SECONDS
+        value: "45"
+      - key: CORE_IDEMPOTENCY_REQUIRE_HEADER
+        value: "false"

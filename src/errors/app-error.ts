@@ -52,6 +52,26 @@ export class ConflictError extends AppError {
   }
 }
 
+export class TooManyRequestsError extends AppError {
+  constructor(
+    message: string,
+    options?: {
+      code?: string;
+      details?: Record<string, unknown>;
+      retry_after_seconds?: number;
+    },
+  ) {
+    super(message, {
+      status_code: 429,
+      code: options?.code ?? "too_many_requests",
+      details: {
+        ...(options?.details ?? {}),
+        retry_after_seconds: options?.retry_after_seconds,
+      },
+    });
+  }
+}
+
 export class DownstreamServiceError extends AppError {
   constructor(
     service: "prompt_library" | "prompt_runner" | "source_intelligence" | "dashboard_layer",

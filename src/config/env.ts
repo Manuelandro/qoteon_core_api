@@ -9,6 +9,7 @@ const env_schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().positive().default(3000),
+  CORE_TRUST_PROXY: z.coerce.boolean().default(true),
   AUTH_MODE: z.enum(["stub", "supabase"]).default("stub"),
   DATABASE_URL: z.string().min(1),
   DATABASE_SSL_MODE: z.enum(["disable", "require", "no-verify"]).default("no-verify"),
@@ -23,6 +24,16 @@ const env_schema = z.object({
   SOURCE_INTELLIGENCE_AUTH_TOKEN: z.string().optional(),
   DASHBOARD_LAYER_BASE_URL: z.string().url().default(DEFAULT_DASHBOARD_LAYER_BASE_URL),
   DASHBOARD_LAYER_AUTH_TOKEN: z.string().optional(),
+  CORE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+  CORE_RATE_LIMIT_DEFAULT_MAX: z.coerce.number().int().positive().default(240),
+  CORE_RATE_LIMIT_PROJECT_CREATE_MAX: z.coerce.number().int().positive().default(20),
+  CORE_RATE_LIMIT_RUN_LAUNCH_MAX: z.coerce.number().int().positive().default(30),
+  CORE_RATE_LIMIT_CRAWL_TRIGGER_MAX: z.coerce.number().int().positive().default(30),
+  CORE_BACKPRESSURE_MAX_IN_FLIGHT: z.coerce.number().int().positive().default(120),
+  CORE_BACKPRESSURE_MAX_IN_FLIGHT_CRITICAL: z.coerce.number().int().positive().default(24),
+  CORE_IDEMPOTENCY_EXPLICIT_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
+  CORE_IDEMPOTENCY_IMPLICIT_TTL_SECONDS: z.coerce.number().int().positive().default(45),
+  CORE_IDEMPOTENCY_REQUIRE_HEADER: z.coerce.boolean().default(false),
 });
 
 export type Env = z.infer<typeof env_schema>;

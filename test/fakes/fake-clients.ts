@@ -188,6 +188,7 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
   fail_create_run_batch: Error | null = null;
   fail_list_run_batches: Error | null = null;
   fail_get_run_progress: Error | null = null;
+  create_run_batch_delay_ms = 0;
   private run_batch_counter = 0;
   private execution_counter = 0;
 
@@ -215,6 +216,10 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
   ): Promise<RunBatch> {
     if (this.fail_create_run_batch) {
       throw this.fail_create_run_batch;
+    }
+
+    if (this.create_run_batch_delay_ms > 0) {
+      await sleep(this.create_run_batch_delay_ms);
     }
 
     const run_batch_id = `run-${++this.run_batch_counter}`;
@@ -365,6 +370,7 @@ export class FakeSourceIntelligenceClient implements SourceIntelligenceClient {
   readonly prompt_context_by_project = new Map<string, SourceIntelligencePromptContext>();
   fail_bootstrap: Error | null = null;
   fail_create_crawl_runs: Error | null = null;
+  create_crawl_runs_delay_ms = 0;
   bootstrap_call_count = 0;
   create_crawl_runs_call_count = 0;
   private target_counter = 0;
@@ -414,6 +420,10 @@ export class FakeSourceIntelligenceClient implements SourceIntelligenceClient {
 
     if (this.fail_create_crawl_runs) {
       throw this.fail_create_crawl_runs;
+    }
+
+    if (this.create_crawl_runs_delay_ms > 0) {
+      await sleep(this.create_crawl_runs_delay_ms);
     }
 
     const crawlRun: SourceIntelligenceCrawlRun = {
@@ -494,6 +504,12 @@ export class FakeSourceIntelligenceClient implements SourceIntelligenceClient {
       }
     );
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export class FakeDashboardLayerClient implements DashboardLayerClient {
