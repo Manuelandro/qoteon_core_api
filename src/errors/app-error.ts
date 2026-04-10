@@ -54,7 +54,7 @@ export class ConflictError extends AppError {
 
 export class DownstreamServiceError extends AppError {
   constructor(
-    service: "prompt_library" | "prompt_runner",
+    service: "prompt_library" | "prompt_runner" | "source_intelligence" | "dashboard_layer",
     message: string,
     details?: Record<string, unknown>,
   ) {

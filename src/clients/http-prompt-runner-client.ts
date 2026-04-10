@@ -2,6 +2,8 @@ import {
   ExecutionRecord,
   ListExecutionsFilters,
   ListRunBatchesFilters,
+  PromptRecord,
+  PromptSyncRecord,
   RunBatch,
   RunProgress,
   RunType,
@@ -11,6 +13,31 @@ import { PromptRunnerClient } from "./prompt-runner-client";
 
 export class HttpPromptRunnerClient implements PromptRunnerClient {
   constructor(private readonly client: HttpJsonClient) {}
+
+  async sync_project_prompts(
+    project_id: string,
+    prompts: PromptRecord[],
+  ): Promise<PromptSyncRecord[]> {
+    const response = await this.client.request<{ prompts: PromptSyncRecord[] }>(
+      "POST",
+      `/internal/projects/${project_id}/prompts/sync`,
+      {
+        body: {
+          prompts: prompts.map((prompt) => ({
+            id: prompt.id,
+            title: prompt.title,
+            body: prompt.body ?? "",
+            cluster: prompt.cluster ?? null,
+            intent: prompt.intent ?? null,
+            is_active: prompt.is_active,
+            metadata_json: prompt.metadata_json ?? null,
+          })),
+        },
+      },
+    );
+
+    return response.prompts;
+  }
 
   async create_run_batch(
     project_id: string,

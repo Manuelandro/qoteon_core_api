@@ -1,4 +1,18 @@
 import {
+  DashboardBaseFilters,
+  DashboardClusterBreakdown,
+  DashboardClustersFilters,
+  DashboardCompetitorBreakdown,
+  DashboardCompetitorsFilters,
+  DashboardModelBreakdown,
+  DashboardModelsFilters,
+  DashboardProjectCard,
+  DashboardProjectOverview,
+  DashboardProjectsFilters,
+  DashboardRunResults,
+  DashboardTrends,
+  DashboardTrendsFilters,
+  DashboardVisibilitySummary,
   ExecutionRecord,
   ListExecutionsFilters,
   ListRunBatchesFilters,
@@ -6,14 +20,21 @@ import {
   PromptGenerationResult,
   PromptListFilters,
   PromptRecord,
+  PromptSyncRecord,
+  SourceIntelligenceCrawlRequest,
+  SourceIntelligenceCrawlRun,
+  SourceIntelligenceCrawlTarget,
+  SourceIntelligencePromptContext,
   PromptSet,
   RunBatch,
   RunProgress,
   RunType,
 } from "../../src/domain/core";
+import { DashboardLayerClient } from "../../src/clients/dashboard-layer-client";
 import { NotFoundError } from "../../src/errors/app-error";
 import { PromptLibraryClient } from "../../src/clients/prompt-library-client";
 import { PromptRunnerClient } from "../../src/clients/prompt-runner-client";
+import { SourceIntelligenceClient } from "../../src/clients/source-intelligence-client";
 
 export class FakePromptLibraryClient implements PromptLibraryClient {
   readonly prompts_by_project = new Map<string, PromptRecord[]>();
@@ -32,7 +53,7 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
     }
 
     const existing = this.prompts_by_project.get(project_id) ?? [];
-    const generated_count = payload.prompt_count ?? 3;
+    const generated_count = 3;
     const prompts = [...existing];
 
     for (let index = 0; index < generated_count; index += 1) {
@@ -40,10 +61,12 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
         id: `prompt-${++this.prompt_counter}`,
         project_id,
         title: `Prompt ${this.prompt_counter}`,
+        body: `Best ${payload.category ?? "brand visibility"} option ${this.prompt_counter}`,
         status: "ready",
         is_active: true,
-        cluster: payload.seed_topics?.[index] ?? "brand",
-        intent: payload.intents?.[0] ?? "awareness",
+        cluster: index % 2 === 0 ? "brand" : "comparison",
+        intent: index % 2 === 0 ? "commercial_discovery" : "comparison",
+        metadata_json: payload.metadata_json ?? null,
       });
     }
 
@@ -103,7 +126,13 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
   }
 
   set_prompts(project_id: string, prompts: PromptRecord[]): void {
-    this.prompts_by_project.set(project_id, prompts);
+    this.prompts_by_project.set(
+      project_id,
+      prompts.map((prompt) => ({
+        ...prompt,
+        body: prompt.body ?? prompt.title,
+      })),
+    );
     this.refresh_prompt_sets(project_id);
   }
 
@@ -155,11 +184,27 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
   readonly run_batches = new Map<string, RunBatch>();
   readonly run_progress = new Map<string, RunProgress>();
   readonly executions_by_batch = new Map<string, ExecutionRecord[]>();
+  readonly synced_prompts = new Map<string, string>();
   fail_create_run_batch: Error | null = null;
   fail_list_run_batches: Error | null = null;
   fail_get_run_progress: Error | null = null;
   private run_batch_counter = 0;
   private execution_counter = 0;
+
+  async sync_project_prompts(
+    project_id: string,
+    prompts: PromptRecord[],
+  ): Promise<PromptSyncRecord[]> {
+    return prompts.map((prompt) => {
+      const runner_prompt_id = `runner-${project_id}-${prompt.id}`;
+      this.synced_prompts.set(prompt.id, runner_prompt_id);
+
+      return {
+        source_prompt_id: prompt.id,
+        runner_prompt_id,
+      };
+    });
+  }
 
   async create_run_batch(
     project_id: string,
@@ -311,5 +356,284 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
 
   set_run_progress(run_batch_id: string, progress: RunProgress): void {
     this.run_progress.set(run_batch_id, progress);
+  }
+}
+
+export class FakeSourceIntelligenceClient implements SourceIntelligenceClient {
+  readonly targets_by_project = new Map<string, SourceIntelligenceCrawlTarget[]>();
+  readonly crawl_runs_by_project = new Map<string, SourceIntelligenceCrawlRun[]>();
+  readonly prompt_context_by_project = new Map<string, SourceIntelligencePromptContext>();
+  fail_bootstrap: Error | null = null;
+  fail_create_crawl_runs: Error | null = null;
+  bootstrap_call_count = 0;
+  create_crawl_runs_call_count = 0;
+  private target_counter = 0;
+  private crawl_run_counter = 0;
+
+  async bootstrap_crawl_targets(project_id: string): Promise<{
+    project_id: string;
+    targets: SourceIntelligenceCrawlTarget[];
+  }> {
+    this.bootstrap_call_count += 1;
+
+    if (this.fail_bootstrap) {
+      throw this.fail_bootstrap;
+    }
+
+    const targets = this.targets_by_project.get(project_id) ?? [
+      {
+        id: `crawl-target-${++this.target_counter}`,
+        project_id,
+        target_type: "client_site",
+        project_competitor_id: null,
+        canonical_domain: "acme.com",
+        start_url: "https://acme.com",
+        is_active: true,
+        metadata_json: {},
+      },
+    ];
+
+    this.targets_by_project.set(project_id, targets);
+
+    return {
+      project_id,
+      targets,
+    };
+  }
+
+  async create_crawl_runs(
+    project_id: string,
+    payload: SourceIntelligenceCrawlRequest & {
+      trigger_type?: "project_setup" | "manual" | "scheduled" | "refresh";
+    },
+  ): Promise<{
+    project_id: string;
+    crawl_runs: SourceIntelligenceCrawlRun[];
+  }> {
+    this.create_crawl_runs_call_count += 1;
+
+    if (this.fail_create_crawl_runs) {
+      throw this.fail_create_crawl_runs;
+    }
+
+    const crawlRun: SourceIntelligenceCrawlRun = {
+      id: `crawl-run-${++this.crawl_run_counter}`,
+      crawl_target_id: `crawl-target-${this.crawl_run_counter}`,
+      project_id,
+      status: "queued",
+      trigger_type: payload.trigger_type ?? "manual",
+      scope_type: payload.scope_type ?? "full",
+      max_pages: payload.max_pages ?? 50,
+      max_depth: payload.max_depth ?? 3,
+      pages_discovered: 0,
+      pages_crawled: 0,
+      pages_stored: 0,
+      started_at: null,
+      completed_at: null,
+      metadata_json: payload.single_url ? { single_url: payload.single_url } : {},
+    };
+
+    const existing = this.crawl_runs_by_project.get(project_id) ?? [];
+    existing.unshift(crawlRun);
+    this.crawl_runs_by_project.set(project_id, existing);
+
+    return {
+      project_id,
+      crawl_runs: [crawlRun],
+    };
+  }
+
+  async list_crawl_runs(
+    project_id: string,
+    filters?: { status?: string; limit?: number },
+  ): Promise<SourceIntelligenceCrawlRun[]> {
+    const runs = (this.crawl_runs_by_project.get(project_id) ?? []).filter((run) => {
+      if (filters?.status && run.status !== filters.status) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return typeof filters?.limit === "number" ? runs.slice(0, filters.limit) : runs;
+  }
+
+  async get_prompt_context(project_id: string): Promise<SourceIntelligencePromptContext> {
+    return (
+      this.prompt_context_by_project.get(project_id) ?? {
+        project_id,
+        last_successful_crawl_at: null,
+        is_ready_for_prompt_generation: false,
+        prompt_generation_blockers: [
+          "no_successful_crawl",
+          "no_successful_targets",
+          "no_crawled_pages",
+        ],
+        client_website_crawl_status: "pending",
+        client_website_crawl_message: null,
+        client_website_crawl_attempts_made: 0,
+        client_website_crawl_max_attempts: 5,
+        crawl_coverage: {
+          active_target_count: 0,
+          total_targets: 0,
+          completed_run_count: 0,
+          successful_target_count: 0,
+          total_pages: 0,
+          client_pages: 0,
+          competitor_pages: 0,
+          page_types: {},
+        },
+        suggested_personas: [],
+        suggested_use_cases: [],
+        suggested_features: [],
+        suggested_integrations: [],
+        suggested_industries: [],
+        suggested_comparison_topics: [],
+        suggested_faq_questions: [],
+        competitor_signal_groups: [],
+      }
+    );
+  }
+}
+
+export class FakeDashboardLayerClient implements DashboardLayerClient {
+  project_overview_response: DashboardProjectOverview | null = null;
+  portfolio_projects_response: DashboardProjectCard[] = [];
+  visibility_summary_response: DashboardVisibilitySummary | null = null;
+  model_breakdown_response: DashboardModelBreakdown | null = null;
+  cluster_breakdown_response: DashboardClusterBreakdown | null = null;
+  competitor_breakdown_response: DashboardCompetitorBreakdown | null = null;
+  trends_response: DashboardTrends | null = null;
+  run_results_response: DashboardRunResults | null = null;
+  fail_error: Error | null = null;
+  last_overview_request: { user_id: string; project_id: string } | null = null;
+  last_portfolio_request: { user_id: string; filters?: DashboardProjectsFilters } | null = null;
+  last_visibility_request:
+    | { user_id: string; project_id: string; filters?: DashboardBaseFilters }
+    | null = null;
+  last_model_request:
+    | { user_id: string; project_id: string; filters?: DashboardModelsFilters }
+    | null = null;
+  last_cluster_request:
+    | { user_id: string; project_id: string; filters?: DashboardClustersFilters }
+    | null = null;
+  last_competitor_request:
+    | { user_id: string; project_id: string; filters?: DashboardCompetitorsFilters }
+    | null = null;
+  last_trends_request:
+    | { user_id: string; project_id: string; filters?: DashboardTrendsFilters }
+    | null = null;
+  last_run_results_request: { user_id: string; run_batch_id: string } | null = null;
+
+  async get_project_overview(user_id: string, project_id: string): Promise<DashboardProjectOverview> {
+    this.last_overview_request = { user_id, project_id };
+    this.throw_if_needed();
+
+    if (!this.project_overview_response) {
+      throw new NotFoundError("Dashboard overview not found");
+    }
+
+    return this.project_overview_response;
+  }
+
+  async list_portfolio_projects(
+    user_id: string,
+    filters?: DashboardProjectsFilters,
+  ): Promise<DashboardProjectCard[]> {
+    this.last_portfolio_request = { user_id, filters };
+    this.throw_if_needed();
+    return this.portfolio_projects_response;
+  }
+
+  async get_visibility_summary(
+    user_id: string,
+    project_id: string,
+    filters?: DashboardBaseFilters,
+  ): Promise<DashboardVisibilitySummary> {
+    this.last_visibility_request = { user_id, project_id, filters };
+    this.throw_if_needed();
+
+    if (!this.visibility_summary_response) {
+      throw new NotFoundError("Dashboard visibility summary not found");
+    }
+
+    return this.visibility_summary_response;
+  }
+
+  async get_model_breakdown(
+    user_id: string,
+    project_id: string,
+    filters?: DashboardModelsFilters,
+  ): Promise<DashboardModelBreakdown> {
+    this.last_model_request = { user_id, project_id, filters };
+    this.throw_if_needed();
+
+    if (!this.model_breakdown_response) {
+      throw new NotFoundError("Dashboard model breakdown not found");
+    }
+
+    return this.model_breakdown_response;
+  }
+
+  async get_cluster_breakdown(
+    user_id: string,
+    project_id: string,
+    filters?: DashboardClustersFilters,
+  ): Promise<DashboardClusterBreakdown> {
+    this.last_cluster_request = { user_id, project_id, filters };
+    this.throw_if_needed();
+
+    if (!this.cluster_breakdown_response) {
+      throw new NotFoundError("Dashboard cluster breakdown not found");
+    }
+
+    return this.cluster_breakdown_response;
+  }
+
+  async get_competitor_breakdown(
+    user_id: string,
+    project_id: string,
+    filters?: DashboardCompetitorsFilters,
+  ): Promise<DashboardCompetitorBreakdown> {
+    this.last_competitor_request = { user_id, project_id, filters };
+    this.throw_if_needed();
+
+    if (!this.competitor_breakdown_response) {
+      throw new NotFoundError("Dashboard competitor breakdown not found");
+    }
+
+    return this.competitor_breakdown_response;
+  }
+
+  async get_trends(
+    user_id: string,
+    project_id: string,
+    filters?: DashboardTrendsFilters,
+  ): Promise<DashboardTrends> {
+    this.last_trends_request = { user_id, project_id, filters };
+    this.throw_if_needed();
+
+    if (!this.trends_response) {
+      throw new NotFoundError("Dashboard trends not found");
+    }
+
+    return this.trends_response;
+  }
+
+  async get_run_results(user_id: string, run_batch_id: string): Promise<DashboardRunResults> {
+    this.last_run_results_request = { user_id, run_batch_id };
+    this.throw_if_needed();
+
+    if (!this.run_results_response) {
+      throw new NotFoundError("Dashboard run results not found");
+    }
+
+    return this.run_results_response;
+  }
+
+  private throw_if_needed(): void {
+    if (this.fail_error) {
+      throw this.fail_error;
+    }
   }
 }

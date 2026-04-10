@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: qoteon-core-api
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: "10000"
+      - key: AUTH_MODE
+        value: supabase
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL_MODE
+        value: no-verify
+      - key: DATABASE_CA_CERT_PATH
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: PROMPT_LIBRARY_BASE_URL
+        value: http://qoteon-prompt-library:3000
+      - key: PROMPT_LIBRARY_AUTH_TOKEN
+        sync: false
+      - key: PROMPT_RUNNER_BASE_URL
+        value: http://qoteon-prompt-runner-api:3000
+      - key: PROMPT_RUNNER_AUTH_TOKEN
+        sync: false
+      - key: DASHBOARD_LAYER_BASE_URL
+        value: http://qoteon-dashboard-layer:4020
+      - key: DASHBOARD_LAYER_AUTH_TOKEN
+        sync: false

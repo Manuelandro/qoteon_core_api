@@ -5,6 +5,8 @@ import {
   LaunchRunResult,
   ListExecutionsFilters,
   ListRunBatchesFilters,
+  Project,
+  ProjectCompetitor,
   PromptGenerationPayload,
   PromptGenerationResult,
   PromptListFilters,
@@ -15,10 +17,11 @@ import {
   RunType,
   SetupProjectResult,
 } from "../domain/core";
-import { ValidationError } from "../errors/app-error";
+import { ConflictError, ValidationError } from "../errors/app-error";
 import { to_service_warning } from "../lib/warnings";
 import { PromptLibraryClient } from "../clients/prompt-library-client";
 import { PromptRunnerClient } from "../clients/prompt-runner-client";
+import { SourceIntelligenceClient } from "../clients/source-intelligence-client";
 import { DashboardService } from "./dashboard-service";
 import { ProjectService } from "./project-service";
 
@@ -41,6 +44,7 @@ export class OrchestrationService {
     private readonly project_service: ProjectService,
     private readonly prompt_library_client: PromptLibraryClient,
     private readonly prompt_runner_client: PromptRunnerClient,
+    private readonly source_intelligence_client: SourceIntelligenceClient,
     private readonly dashboard_service: DashboardService,
   ) {}
 
@@ -59,10 +63,11 @@ export class OrchestrationService {
     const competitors = input.competitors?.length
       ? await this.project_service.create_competitors(user_id, project.id, input.competitors)
       : [];
+    const warnings = await this.bootstrap_source_intelligence(project.id);
 
     if (!input.generate_initial_prompts) {
       return {
-        status: "success",
+        status: warnings.length > 0 ? "partial_success" : "success",
         project,
         competitors,
         prompt_generation: {
@@ -70,47 +75,21 @@ export class OrchestrationService {
           succeeded: false,
           result: null,
         },
-        warnings: [],
+        warnings,
       };
     }
 
-    try {
-      const result = await this.prompt_library_client.generate_project_prompts(
-        project.id,
-        input.prompt_generation_payload ?? {},
-      );
-
-      return {
-        status: "success",
-        project,
-        competitors,
-        prompt_generation: {
-          attempted: true,
-          succeeded: true,
-          result,
-        },
-        warnings: [],
-      };
-    } catch (error) {
-      return {
-        status: "partial_success",
-        project,
-        competitors,
-        prompt_generation: {
-          attempted: true,
-          succeeded: false,
-          result: null,
-        },
-        warnings: [
-          to_service_warning(
-            "prompt_library",
-            error,
-            "initial_prompt_generation_failed",
-            "Project created but initial prompt generation failed",
-          ),
-        ],
-      };
-    }
+    return {
+      status: warnings.length > 0 ? "partial_success" : "success",
+      project,
+      competitors,
+      prompt_generation: {
+        attempted: false,
+        succeeded: false,
+        result: null,
+      },
+      warnings,
+    };
   }
 
   async regenerate_project_prompts(
@@ -118,8 +97,27 @@ export class OrchestrationService {
     project_id: string,
     payload: PromptGenerationPayload,
   ): Promise<PromptGenerationResult> {
-    await this.project_service.assert_project_access(user_id, project_id);
-    return this.prompt_library_client.generate_project_prompts(project_id, payload);
+    const project = await this.project_service.assert_project_access(user_id, project_id);
+    const prompt_context = await this.source_intelligence_client.get_prompt_context(project_id);
+
+    if (!prompt_context.is_ready_for_prompt_generation) {
+      throw new ConflictError(
+        "Prompt generation is blocked until Source Intelligence completes a successful crawl",
+        {
+          project_id,
+          blockers: prompt_context.prompt_generation_blockers,
+          last_successful_crawl_at: prompt_context.last_successful_crawl_at,
+          crawl_coverage: prompt_context.crawl_coverage,
+        },
+      );
+    }
+
+    const competitors = await this.project_service.list_competitors(user_id, project_id);
+
+    return this.prompt_library_client.generate_project_prompts(
+      project_id,
+      build_prompt_generation_payload(project, competitors, payload),
+    );
   }
 
   async list_project_prompts(
@@ -217,6 +215,40 @@ export class OrchestrationService {
     return this.prompt_runner_client.retry_execution(execution_id);
   }
 
+  async trigger_project_crawl(
+    user_id: string,
+    project_id: string,
+    input: {
+      target_scope?: "client" | "competitors" | "all";
+      competitor_ids?: string[];
+      scope_type?: "full" | "incremental" | "single_url";
+      max_pages?: number;
+      max_depth?: number;
+      single_url?: string;
+    },
+  ) {
+    await this.project_service.assert_project_access(user_id, project_id);
+
+    return this.source_intelligence_client.create_crawl_runs(project_id, {
+      ...input,
+      trigger_type: "manual",
+    });
+  }
+
+  async list_project_crawl_runs(
+    user_id: string,
+    project_id: string,
+    filters?: { status?: string; limit?: number },
+  ) {
+    await this.project_service.assert_project_access(user_id, project_id);
+    return this.source_intelligence_client.list_crawl_runs(project_id, filters);
+  }
+
+  async get_project_prompt_context(user_id: string, project_id: string) {
+    await this.project_service.assert_project_access(user_id, project_id);
+    return this.source_intelligence_client.get_prompt_context(project_id);
+  }
+
   async get_project_overview(user_id: string, project_id: string) {
     return this.dashboard_service.get_project_overview(user_id, project_id);
   }
@@ -236,10 +268,37 @@ export class OrchestrationService {
       throw new ValidationError("No prompts are available for this run type");
     }
 
+    const project_prompts = await this.prompt_library_client.list_project_prompts(project_id, {
+      is_active: true,
+    });
+    const prompts_by_id = new Map(project_prompts.map((prompt) => [prompt.id, prompt]));
+    const selected_prompts = prompt_set.prompt_ids.map((prompt_id) => {
+      const prompt = prompts_by_id.get(prompt_id);
+
+      if (!prompt?.body) {
+        throw new ValidationError(`Prompt ${prompt_id} is not available for execution`);
+      }
+
+      return prompt;
+    });
+    const synced_prompts = await this.prompt_runner_client.sync_project_prompts(
+      project_id,
+      selected_prompts,
+    );
+    const runner_prompt_ids = prompt_set.prompt_ids.map((prompt_id) => {
+      const synced_prompt = synced_prompts.find((entry) => entry.source_prompt_id === prompt_id);
+
+      if (!synced_prompt) {
+        throw new ValidationError(`Prompt ${prompt_id} could not be synchronized to the runner`);
+      }
+
+      return synced_prompt.runner_prompt_id;
+    });
+
     const run_batch = await this.prompt_runner_client.create_run_batch(
       project_id,
       run_type,
-      prompt_set.prompt_ids,
+      runner_prompt_ids,
       ai_model_ids,
       metadata_json,
     );
@@ -249,4 +308,65 @@ export class OrchestrationService {
       run_batch,
     };
   }
+
+  private async bootstrap_source_intelligence(project_id: string): Promise<SetupProjectResult["warnings"]> {
+    const warnings: SetupProjectResult["warnings"] = [];
+
+    try {
+      await this.source_intelligence_client.bootstrap_crawl_targets(project_id);
+    } catch (error) {
+      warnings.push(
+        to_service_warning(
+          "source_intelligence",
+          error,
+          "source_intelligence_bootstrap_failed",
+          "Project created but crawl target bootstrap failed",
+        ),
+      );
+
+      return warnings;
+    }
+
+    try {
+      await this.source_intelligence_client.create_crawl_runs(project_id, {
+        target_scope: "all",
+        scope_type: "full",
+        trigger_type: "project_setup",
+      });
+    } catch (error) {
+      warnings.push(
+        to_service_warning(
+          "source_intelligence",
+          error,
+          "source_intelligence_initial_crawl_failed",
+          "Project created but initial crawl enqueue failed",
+        ),
+      );
+    }
+
+    return warnings;
+  }
+}
+
+function build_prompt_generation_payload(
+  project: Project,
+  competitors: ProjectCompetitor[],
+  payload: PromptGenerationPayload = {},
+): PromptGenerationPayload {
+  return {
+    category: payload.category ?? project.primary_category,
+    competitors:
+      payload.competitors ??
+      competitors.map((competitor) => competitor.competitor_name),
+    personas: payload.personas,
+    use_cases: payload.use_cases,
+    features: payload.features,
+    integrations: payload.integrations,
+    industries: payload.industries,
+    comparison_topics: payload.comparison_topics,
+    faq_questions: payload.faq_questions,
+    region: payload.region ?? project.target_region,
+    language: payload.language ?? project.target_language,
+    metadata_json: payload.metadata_json,
+  };
 }

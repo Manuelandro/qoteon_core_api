@@ -2,12 +2,18 @@ import {
   ExecutionRecord,
   ListExecutionsFilters,
   ListRunBatchesFilters,
+  PromptRecord,
+  PromptSyncRecord,
   RunBatch,
   RunProgress,
   RunType,
 } from "../domain/core";
 
 export interface PromptRunnerClient {
+  sync_project_prompts(
+    project_id: string,
+    prompts: PromptRecord[],
+  ): Promise<PromptSyncRecord[]>;
   create_run_batch(
     project_id: string,
     run_type: RunType,

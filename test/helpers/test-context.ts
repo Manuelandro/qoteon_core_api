@@ -11,26 +11,33 @@ import {
   InMemoryOrganizationRepository,
   InMemoryProjectRepository,
 } from "../fakes/in-memory-repositories";
-import { FakePromptLibraryClient, FakePromptRunnerClient } from "../fakes/fake-clients";
+import {
+  FakeDashboardLayerClient,
+  FakePromptLibraryClient,
+  FakePromptRunnerClient,
+  FakeSourceIntelligenceClient,
+} from "../fakes/fake-clients";
 
 export function create_test_context() {
   const organization_repository = new InMemoryOrganizationRepository();
   const project_repository = new InMemoryProjectRepository();
   const prompt_library_client = new FakePromptLibraryClient();
   const prompt_runner_client = new FakePromptRunnerClient();
+  const source_intelligence_client = new FakeSourceIntelligenceClient();
+  const dashboard_layer_client = new FakeDashboardLayerClient();
 
   const organization_service = new OrganizationService(organization_repository);
   const project_service = new ProjectService(organization_repository, project_repository);
   const dashboard_service = new DashboardService(
     project_service,
-    project_repository,
-    prompt_library_client,
     prompt_runner_client,
+    dashboard_layer_client,
   );
   const orchestration_service = new OrchestrationService(
     project_service,
     prompt_library_client,
     prompt_runner_client,
+    source_intelligence_client,
     dashboard_service,
   );
 
@@ -51,11 +58,16 @@ export function create_test_context() {
     clients: {
       prompt_library_client,
       prompt_runner_client,
+      source_intelligence_client,
+      dashboard_layer_client,
     },
     async build_app() {
       const app = build_app({
         logger: false,
-        env: read_env({ AUTH_MODE: "stub" }),
+        env: read_env({
+          AUTH_MODE: "stub",
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres",
+        }),
         services,
       });
       await app.ready();

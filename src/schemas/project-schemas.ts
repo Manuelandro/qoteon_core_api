@@ -32,9 +32,12 @@ export const project_create_request_schema = z.object({
   generate_initial_prompts: z.boolean().default(false),
   prompt_generation_payload: z
     .object({
-      prompt_count: z.number().int().positive().optional(),
-      intents: z.array(z.string().min(1)).optional(),
-      seed_topics: z.array(z.string().min(1)).optional(),
+      category: z.string().min(1).optional(),
+      competitors: z.array(z.string().min(1)).optional(),
+      personas: z.array(z.string().min(1)).optional(),
+      use_cases: z.array(z.string().min(1)).optional(),
+      region: z.string().min(1).optional(),
+      language: z.string().min(1).optional(),
       metadata_json: json_record_schema.optional(),
     })
     .optional(),

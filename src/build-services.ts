@@ -1,15 +1,22 @@
+import { type Pool } from "pg";
+
+import { DashboardLayerClient } from "./clients/dashboard-layer-client";
+import { HttpDashboardLayerClient } from "./clients/http-dashboard-layer-client";
 import { HttpJsonClient } from "./clients/http-client";
 import { HttpPromptLibraryClient } from "./clients/http-prompt-library-client";
 import { HttpPromptRunnerClient } from "./clients/http-prompt-runner-client";
+import { HttpSourceIntelligenceClient } from "./clients/http-source-intelligence-client";
 import { PromptLibraryClient } from "./clients/prompt-library-client";
 import { PromptRunnerClient } from "./clients/prompt-runner-client";
+import { SourceIntelligenceClient } from "./clients/source-intelligence-client";
 import { Env } from "./config/env";
-import { create_supabase_admin_client, create_supabase_auth_client } from "./lib/supabase";
+import { create_database_pool } from "./db/postgres";
+import { create_supabase_auth_client } from "./lib/supabase-auth";
 import { OrganizationRepository } from "./repositories/organization-repository";
+import { PostgresOrganizationRepository } from "./repositories/postgres-organization-repository";
+import { PostgresProjectRepository } from "./repositories/postgres-project-repository";
+import { PostgresUserRepository } from "./repositories/postgres-user-repository";
 import { ProjectRepository } from "./repositories/project-repository";
-import { SupabaseOrganizationRepository } from "./repositories/supabase-organization-repository";
-import { SupabaseProjectRepository } from "./repositories/supabase-project-repository";
-import { SupabaseUserRepository } from "./repositories/supabase-user-repository";
 import { UserRepository } from "./repositories/user-repository";
 import { AuthService, StubAuthService, SupabaseAuthService } from "./services/auth-service";
 import { DashboardService } from "./services/dashboard-service";
@@ -25,13 +32,32 @@ export interface AppServices {
   orchestration_service: OrchestrationService;
 }
 
-export function create_app_services(env: Env): AppServices {
-  const supabase_admin_client = create_supabase_admin_client(env);
-  const user_repository: UserRepository = new SupabaseUserRepository(supabase_admin_client);
-  const organization_repository: OrganizationRepository = new SupabaseOrganizationRepository(
-    supabase_admin_client,
-  );
-  const project_repository: ProjectRepository = new SupabaseProjectRepository(supabase_admin_client);
+export interface AppRuntime {
+  close: () => Promise<void>;
+  services: AppServices;
+}
+
+export function create_app_runtime(env: Env): AppRuntime {
+  const pool = create_database_pool({
+    connection_string: env.DATABASE_URL,
+    ssl_mode: env.DATABASE_SSL_MODE,
+    ...(env.DATABASE_CA_CERT_PATH ? { ca_cert_path: env.DATABASE_CA_CERT_PATH } : {}),
+  });
+
+  const services = create_app_services(env, pool);
+
+  return {
+    services,
+    close: async () => {
+      await pool.end();
+    },
+  };
+}
+
+export function create_app_services(env: Env, pool: Pool): AppServices {
+  const user_repository: UserRepository = new PostgresUserRepository(pool);
+  const organization_repository: OrganizationRepository = new PostgresOrganizationRepository(pool);
+  const project_repository: ProjectRepository = new PostgresProjectRepository(pool);
 
   const prompt_library_client: PromptLibraryClient = new HttpPromptLibraryClient(
     new HttpJsonClient({
@@ -49,6 +75,22 @@ export function create_app_services(env: Env): AppServices {
     }),
   );
 
+  const source_intelligence_client: SourceIntelligenceClient = new HttpSourceIntelligenceClient(
+    new HttpJsonClient({
+      service: "source_intelligence",
+      base_url: env.SOURCE_INTELLIGENCE_BASE_URL,
+      auth_token: env.SOURCE_INTELLIGENCE_AUTH_TOKEN,
+    }),
+  );
+
+  const dashboard_layer_client: DashboardLayerClient = new HttpDashboardLayerClient(
+    new HttpJsonClient({
+      service: "dashboard_layer",
+      base_url: env.DASHBOARD_LAYER_BASE_URL,
+      auth_token: env.DASHBOARD_LAYER_AUTH_TOKEN,
+    }),
+  );
+
   const auth_service: AuthService =
     env.AUTH_MODE === "supabase"
       ? new SupabaseAuthService(create_supabase_auth_client(env), user_repository)
@@ -58,14 +100,14 @@ export function create_app_services(env: Env): AppServices {
   const project_service = new ProjectService(organization_repository, project_repository);
   const dashboard_service = new DashboardService(
     project_service,
-    project_repository,
-    prompt_library_client,
     prompt_runner_client,
+    dashboard_layer_client,
   );
   const orchestration_service = new OrchestrationService(
     project_service,
     prompt_library_client,
     prompt_runner_client,
+    source_intelligence_client,
     dashboard_service,
   );
 

@@ -64,7 +64,7 @@ export const competitor_schema = z.object({
 export const service_warning_schema = z.object({
   code: z.string(),
   message: z.string(),
-  service: z.enum(["core_api", "prompt_library", "prompt_runner"]),
+  service: z.enum(["core_api", "prompt_library", "prompt_runner", "source_intelligence", "dashboard_layer"]),
   retryable: z.boolean(),
   details: json_record_schema.optional(),
 });

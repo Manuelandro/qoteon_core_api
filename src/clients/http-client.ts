@@ -1,6 +1,10 @@
 import { DownstreamServiceError } from "../errors/app-error";
 
-type DownstreamServiceName = "prompt_library" | "prompt_runner";
+type DownstreamServiceName =
+  | "prompt_library"
+  | "prompt_runner"
+  | "source_intelligence"
+  | "dashboard_layer";
 
 export interface HttpJsonClientOptions {
   service: DownstreamServiceName;
@@ -26,6 +30,7 @@ export class HttpJsonClient {
     options?: {
       query?: object;
       body?: unknown;
+      headers?: Record<string, string>;
     },
   ): Promise<T> {
     if (!this.base_url) {
@@ -47,6 +52,7 @@ export class HttpJsonClient {
           accept: "application/json",
           ...(options?.body === undefined ? {} : { "content-type": "application/json" }),
           ...(this.auth_token ? { authorization: `Bearer ${this.auth_token}` } : {}),
+          ...options?.headers,
         },
         body: options?.body === undefined ? undefined : JSON.stringify(options.body),
         signal: AbortSignal.timeout(this.timeout_ms),

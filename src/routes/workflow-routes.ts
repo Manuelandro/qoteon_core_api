@@ -7,6 +7,7 @@ import { parse_schema } from "../lib/validation";
 import {
   launch_run_request_schema,
   prompt_generation_request_schema,
+  source_intelligence_crawl_request_schema,
 } from "../schemas/workflow-schemas";
 import {
   list_executions_query_schema,
@@ -128,6 +129,45 @@ export async function register_workflow_routes(
     );
 
     return reply.code(201).send(result);
+  });
+
+  app.post("/projects/:project_id/source-intelligence/crawl-runs", async (request, reply) => {
+    const params = parse_schema(project_params_schema, request.params);
+    const body = parse_schema(source_intelligence_crawl_request_schema, request.body);
+    const result = await services.orchestration_service.trigger_project_crawl(
+      request.current_user.user_id,
+      params.project_id,
+      body,
+    );
+
+    return reply.code(201).send(result);
+  });
+
+  app.get("/projects/:project_id/source-intelligence/crawl-runs", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+    const query = parse_schema(
+      z.object({
+        status: z.string().optional(),
+        limit: z.coerce.number().int().positive().optional(),
+      }),
+      request.query,
+    );
+
+    return {
+      crawl_runs: await services.orchestration_service.list_project_crawl_runs(
+        request.current_user.user_id,
+        params.project_id,
+        query,
+      ),
+    };
+  });
+
+  app.get("/projects/:project_id/source-intelligence/prompt-context", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+    return services.orchestration_service.get_project_prompt_context(
+      request.current_user.user_id,
+      params.project_id,
+    );
   });
 
   app.get("/projects/:project_id/run-batches", async (request) => {

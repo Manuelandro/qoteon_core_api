@@ -13,6 +13,19 @@ async function start(): Promise<void> {
       host: env.HOST,
       port: env.PORT,
     });
+
+    const shutdown = async () => {
+      await app.close();
+      process.exit(0);
+    };
+
+    process.on("SIGINT", () => {
+      void shutdown();
+    });
+
+    process.on("SIGTERM", () => {
+      void shutdown();
+    });
   } catch (error) {
     app.log.error(error);
     process.exitCode = 1;

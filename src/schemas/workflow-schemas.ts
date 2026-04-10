@@ -3,9 +3,17 @@ import { z } from "zod";
 import { competitor_schema, json_record_schema, project_schema, run_type_schema, service_warning_schema } from "./common";
 
 export const prompt_generation_request_schema = z.object({
-  prompt_count: z.number().int().positive().optional(),
-  intents: z.array(z.string().min(1)).optional(),
-  seed_topics: z.array(z.string().min(1)).optional(),
+  category: z.string().min(1).optional(),
+  competitors: z.array(z.string().min(1)).optional(),
+  personas: z.array(z.string().min(1)).optional(),
+  use_cases: z.array(z.string().min(1)).optional(),
+  features: z.array(z.string().min(1)).optional(),
+  integrations: z.array(z.string().min(1)).optional(),
+  industries: z.array(z.string().min(1)).optional(),
+  comparison_topics: z.array(z.string().min(1)).optional(),
+  faq_questions: z.array(z.string().min(1)).optional(),
+  region: z.string().min(1).optional(),
+  language: z.string().min(1).optional(),
   metadata_json: json_record_schema.optional(),
 });
 
@@ -18,6 +26,7 @@ export const prompt_record_schema = z.object({
   intent: z.string().nullable().optional(),
   status: z.string(),
   is_active: z.boolean(),
+  metadata_json: json_record_schema.nullable().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
 });
@@ -52,4 +61,13 @@ export const setup_project_response_schema = z.object({
 export const launch_run_request_schema = z.object({
   ai_model_ids: z.array(z.string().min(1)).min(1),
   metadata_json: json_record_schema.optional(),
+});
+
+export const source_intelligence_crawl_request_schema = z.object({
+  target_scope: z.enum(["client", "competitors", "all"]).optional(),
+  competitor_ids: z.array(z.string().min(1)).optional(),
+  scope_type: z.enum(["full", "incremental", "single_url"]).optional(),
+  max_pages: z.number().int().positive().optional(),
+  max_depth: z.number().int().positive().optional(),
+  single_url: z.string().min(1).optional(),
 });

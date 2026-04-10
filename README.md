@@ -6,16 +6,30 @@ Production-minded Core API / orchestration service for Qoteon.
 
 - Serves as the only backend the frontend should call
 - Owns organizations, organization membership, projects, and competitors
-- Orchestrates Prompt Library and Prompt Runner through client interfaces
-- Aggregates frontend-ready dashboard and overview responses
+- Orchestrates Source Intelligence, Prompt Library, and Prompt Runner through client interfaces
+- Proxies Dashboard Layer portfolio, overview, KPI, trend, and run-result reads
 - Keeps workflow logic in services instead of route handlers
+
+## Current implementation status
+
+- Implemented:
+  - project and competitor CRUD
+  - automatic post-crawl prompt generation owned by Prompt Library after Source Intelligence readiness notification, with manual regeneration still available through Core
+  - crawl-target bootstrap and crawl-run orchestration through Source Intelligence
+  - run launch orchestration through Prompt Runner
+  - dashboard portfolio, overview, KPI, trend, and run-result proxy routes through Dashboard Layer
+  - project-level source-intelligence status, persisted client crawl pass flags, prompt-context readiness, and prompt-context read routes
+  - partial-success handling when downstream orchestration fails after project creation
+- Deferred:
+  - proxying parser summary reads through Core
 
 ## Stack
 
 - Node.js
 - TypeScript
 - Fastify
-- Supabase
+- PostgreSQL via `pg` for all application data access
+- Supabase Auth for bearer-token verification
 - Zod
 - Native `node:test`
 
@@ -26,26 +40,40 @@ Production-minded Core API / orchestration service for Qoteon.
   - Reads `x-user-id`, `x-user-email`, `x-user-name`, and `x-user-role`
 - `AUTH_MODE=supabase`
   - Verifies Bearer tokens with Supabase Auth
-  - Upserts the authenticated user into `public.users`
+  - Upserts the authenticated user into `public.core_users` through Postgres
 
 ## Downstream service assumptions
 
 The Core API currently ships with HTTP adapters for:
 
+- Source Intelligence
 - Prompt Library
 - Prompt Runner
+- Dashboard Layer
+
+Prompt Runner now supports both `PROVIDER_EXECUTION_MODE=stub` and
+`PROVIDER_EXECUTION_MODE=live`. Core does not manage provider credentials
+itself; the live provider keys must be configured on the Prompt Runner API and
+worker services.
 
 Default Render internal service base URLs:
 
-- Prompt Library: `http://qoteon-prompt-library-agz7:3000`
+- Source Intelligence: `http://qoteon-source-intelligence-api:3000`
+- Prompt Library: `http://qoteon-prompt-library:3000`
 - Prompt Runner: `http://qoteon-prompt-runner-api:3000`
+- Dashboard Layer: `http://qoteon-dashboard-layer:4020`
 
-Those are the defaults used by the app when `PROMPT_LIBRARY_BASE_URL` and `PROMPT_RUNNER_BASE_URL` are not explicitly set.
+Those are the defaults used by the app when `SOURCE_INTELLIGENCE_BASE_URL`, `PROMPT_LIBRARY_BASE_URL`, `PROMPT_RUNNER_BASE_URL`, and `DASHBOARD_LAYER_BASE_URL` are not explicitly set.
 
-Render shows Prompt Library as a `TCP` connection and Prompt Runner as an `HTTP` connection in the panel. This codebase still assumes both downstreams expose HTTP APIs. For Prompt Library, that means the app sends HTTP requests to the internal host `qoteon-prompt-library-agz7:3000` over Render's private network. If Prompt Library is actually speaking a non-HTTP protocol on that port, the current adapter must be replaced.
+This codebase assumes all four downstreams expose HTTP APIs on Render private-network hosts.
 
 Default internal paths assumed by the adapters:
 
+- Source Intelligence
+  - `POST /internal/projects/:project_id/crawl-targets/bootstrap`
+  - `POST /internal/projects/:project_id/crawl-runs`
+  - `GET /internal/projects/:project_id/crawl-runs`
+  - `GET /internal/projects/:project_id/prompt-context`
 - Prompt Library
   - `POST /internal/projects/:project_id/prompts/generate`
   - `GET /internal/projects/:project_id/prompts`
@@ -59,20 +87,34 @@ Default internal paths assumed by the adapters:
   - `GET /internal/run-batches/:run_batch_id/progress`
   - `GET /internal/run-batches/:run_batch_id/executions`
   - `POST /internal/executions/:execution_id/retry`
+- Dashboard Layer
+  - `GET /portfolio/projects`
+  - `GET /projects/:project_id/overview`
+  - `GET /projects/:project_id/visibility/summary`
+  - `GET /projects/:project_id/visibility/models`
+  - `GET /projects/:project_id/visibility/clusters`
+  - `GET /projects/:project_id/visibility/competitors`
+  - `GET /projects/:project_id/visibility/trends`
+  - `GET /runs/:run_batch_id/results`
 
 If your Render services expose different paths behind those internal hosts, update the HTTP clients without changing the route or orchestration layers.
 
 ## Render deployment notes
 
-- Deploy the Core API, Prompt Library, and Prompt Runner API into the same Render private network.
-- The Core API expects to reach Prompt Library at `qoteon-prompt-library-agz7:3000`.
+- Deploy the Core API, Source Intelligence, Prompt Library, Prompt Runner API, and Dashboard Layer into the same Render private network.
+- The Core API expects to reach Source Intelligence at `qoteon-source-intelligence-api:3000`.
+- The Core API expects to reach Prompt Library at `qoteon-prompt-library:3000`.
 - The Core API expects to reach Prompt Runner API at `qoteon-prompt-runner-api:3000`.
-- Prompt Library is currently treated as an HTTP API reachable via its Render internal TCP address.
-- Override `PROMPT_LIBRARY_BASE_URL` or `PROMPT_RUNNER_BASE_URL` only if you intentionally change those internal service names or ports.
+- The Core API expects to reach Dashboard Layer at `qoteon-dashboard-layer:4020`.
+- Set `DASHBOARD_LAYER_AUTH_TOKEN` in Core and `INTERNAL_AUTH_TOKEN` in Dashboard Layer to the same private value.
+- Core forwards `x-qoteon-user-id` to Dashboard Layer so the dashboard service can re-check tenant access.
+- Override `SOURCE_INTELLIGENCE_BASE_URL`, `PROMPT_LIBRARY_BASE_URL`, `PROMPT_RUNNER_BASE_URL`, or `DASHBOARD_LAYER_BASE_URL` only if you intentionally change those internal service names or ports.
 
 ## API routes
 
 All routes except `GET /health` require authentication.
+
+Database access for all local Core API tables is done through PostgreSQL using `DATABASE_URL`. Supabase client usage is limited to auth token verification when `AUTH_MODE=supabase`.
 
 - In `AUTH_MODE=stub`, pass:
   - `x-user-id`
@@ -136,15 +178,7 @@ All routes except `GET /health` require authentication.
       "notes": "Optional note"
     }
   ],
-  "generate_initial_prompts": true,
-  "prompt_generation_payload": {
-    "prompt_count": 20,
-    "intents": ["awareness", "comparison"],
-    "seed_topics": ["brand", "category"],
-    "metadata_json": {
-      "source": "onboarding"
-    }
-  }
+  "generate_initial_prompts": false
 }
 ```
 
@@ -152,13 +186,16 @@ All routes except `GET /health` require authentication.
   - `status` is optional.
   - `competitors` is optional.
   - `generate_initial_prompts` defaults to `false`.
-  - `prompt_generation_payload` is optional.
+  - `generate_initial_prompts` is accepted for backward compatibility, but project creation no longer generates prompts inline and the flag is ignored.
 - What it does:
   - Validates organization access.
   - Creates the project.
   - Creates competitors if provided.
-  - Optionally triggers Prompt Library prompt generation.
-  - Returns `success` or `partial_success` if prompt generation fails after project creation.
+  - Bootstraps Source Intelligence crawl targets and enqueues initial crawl runs asynchronously.
+  - Returns immediately while Source Intelligence crawls the client and competitor sites.
+  - Relies on Prompt Library to generate the initial prompt set automatically once Source Intelligence has produced ready crawl context.
+  - Leaves `POST /projects/:project_id/prompts/generate` available as an explicit regeneration route after readiness.
+  - Returns `success` or `partial_success` if any downstream orchestration fails after project creation.
 
 #### `GET /projects`
 
@@ -310,16 +347,19 @@ All routes except `GET /health` require authentication.
 
 ```json
 {
-  "prompt_count": 20,
-  "intents": ["awareness", "comparison"],
-  "seed_topics": ["brand", "category"],
+  "personas": ["brand marketers", "SEO leads"],
+  "use_cases": ["monitoring brand mentions in AI answers"],
   "metadata_json": {
     "source": "manual_regeneration"
   }
 }
 ```
 
-- What it does: validates project access and asks Prompt Library to regenerate prompts for the project.
+- What it does: validates project access, checks that Source Intelligence is ready for prompt generation, and then asks Prompt Library to regenerate prompts for the project.
+- Notes:
+  - Initial prompt generation is normally automatic once Source Intelligence becomes ready.
+  - This route exists for explicit regeneration after a later crawl or data refresh.
+- If Source Intelligence is not ready yet, this route returns `409 conflict`.
 
 #### `GET /projects/:project_id/prompts`
 
@@ -387,6 +427,71 @@ All routes except `GET /health` require authentication.
 
 - Payload: none
 - What it does: marks one prompt as inactive in Prompt Library.
+
+### Source intelligence workflows
+
+#### `POST /projects/:project_id/source-intelligence/crawl-runs`
+
+- Path params:
+
+```json
+{
+  "project_id": "project_123"
+}
+```
+
+- Payload:
+
+```json
+{
+  "target_scope": "all",
+  "scope_type": "full",
+  "max_pages": 50,
+  "max_depth": 3
+}
+```
+
+- Notes:
+  - `target_scope` may be `client`, `competitors`, or `all`.
+  - `scope_type` may be `full`, `incremental`, or `single_url`.
+  - `competitor_ids` and `single_url` are optional advanced filters.
+- What it does: validates project access and asks Source Intelligence to enqueue crawl runs for the project. Use this route when prompt context reports `client_website_crawl_status=not_passed` and you want to retry the client crawl later.
+
+#### `GET /projects/:project_id/source-intelligence/crawl-runs`
+
+- Path params:
+
+```json
+{
+  "project_id": "project_123"
+}
+```
+
+- Query params:
+
+```json
+{
+  "status": "completed",
+  "limit": 10
+}
+```
+
+- Notes:
+  - Both query params are optional.
+- What it does: returns crawl runs for the project through the Source Intelligence client.
+
+#### `GET /projects/:project_id/source-intelligence/prompt-context`
+
+- Path params:
+
+```json
+{
+  "project_id": "project_123"
+}
+```
+
+- Payload: none
+- What it does: returns the latest crawl-derived prompt-context payload for the project, including `is_ready_for_prompt_generation`, `prompt_generation_blockers`, `client_website_crawl_status`, `client_website_crawl_message`, `client_website_crawl_attempts_made`, and `client_website_crawl_max_attempts`.
 
 ### Run workflows
 
@@ -553,10 +658,9 @@ All routes except `GET /health` require authentication.
 
 - Payload: none
 - What it does:
-  - Loads the project and competitors from local tables.
-  - Aggregates prompt summary from Prompt Library.
-  - Aggregates latest run batches and progress from Prompt Runner.
-  - Returns frontend-ready overview data plus warnings if downstream data is partially unavailable.
+  - Validates project access in Core.
+  - Forwards the request to Dashboard Layer with the authenticated user ID.
+  - Returns the dashboard overview payload after Dashboard Layer re-checks tenant access and lazily materializes KPIs when needed.
 
 #### `GET /dashboard/projects`
 
@@ -565,30 +669,105 @@ All routes except `GET /health` require authentication.
 ```json
 {
   "organization_id": "org_123",
-  "status": "active"
+  "status": "active",
+  "limit": 20
 }
 ```
 
 - Notes:
-  - Both query params are optional.
-- What it does: returns lightweight dashboard cards for all visible projects, including prompt summary, latest run summary, and warnings when downstream data is unavailable.
+  - All query params are optional.
+- What it does:
+  - Validates optional organization scope in Core.
+  - Proxies the request to Dashboard Layer's portfolio endpoint.
+  - Returns KPI-focused portfolio cards for every visible project.
+
+#### `GET /projects/:project_id/visibility/summary`
+
+- Query params:
+
+```json
+{
+  "run_batch_id": "run_batch_123",
+  "run_type": "baseline",
+  "start_date": "2026-04-01T00:00:00.000Z",
+  "end_date": "2026-04-30T23:59:59.999Z"
+}
+```
+
+- Notes:
+  - All query params are optional.
+  - Core also accepts Dashboard Layer's camelCase query aliases such as `runBatchId` and `startDate`.
+- What it does: validates project access and proxies the canonical KPI summary request to Dashboard Layer.
+
+#### `GET /projects/:project_id/visibility/models`
+
+- What it does: validates project access and proxies the model-level dashboard breakdown request to Dashboard Layer.
+
+#### `GET /projects/:project_id/visibility/clusters`
+
+- What it does: validates project access and proxies the cluster-level dashboard breakdown request to Dashboard Layer.
+
+#### `GET /projects/:project_id/visibility/competitors`
+
+- What it does: validates project access and proxies the competitor-pressure breakdown request to Dashboard Layer.
+
+#### `GET /projects/:project_id/visibility/trends`
+
+- What it does: validates project access and proxies chart-ready trend data from Dashboard Layer.
+
+#### `GET /run-batches/:run_batch_id/results`
+
+- Payload: none
+- What it does:
+  - Loads the run batch from Prompt Runner so Core can validate access to the owning project.
+  - Proxies the run-results dashboard request to Dashboard Layer.
+  - Returns the run KPI summary plus model, cluster, and competitor breakdowns.
 
 ## Data model
 
-Supabase SQL migrations live under [supabase/migrations](/Users/manuelpalma/Work/Personals/qoteon_core_api/supabase/migrations).
+Supabase SQL migrations live under [supabase/migrations](/Users/manuelpalma/Work/Personals/qoteon/qoteon_core_api/supabase/migrations).
 
 Tables created:
 
-- `public.users`
-- `public.organizations`
-- `public.organization_users`
-- `public.projects`
-- `public.project_competitors`
+- `public.core_users`
+- `public.core_organizations`
+- `public.core_organization_users`
+- `public.core_projects`
+- `public.core_project_competitors`
 
 ## Commands
 
 ```bash
 npm install
+npm run db:migrate
 npm run build
 npm test
+```
+
+`npm run db:migrate` uses `psql` against `DATABASE_URL` and applies every `.sql` file in `supabase/migrations` in filename order.
+
+Required database env vars:
+
+```bash
+DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.<project-ref>.supabase.co:5432/postgres
+DATABASE_SSL_MODE=no-verify
+DATABASE_CA_CERT_PATH=
+```
+
+Downstream service env vars:
+
+```bash
+SOURCE_INTELLIGENCE_BASE_URL=http://qoteon-source-intelligence-api:3000
+SOURCE_INTELLIGENCE_AUTH_TOKEN=
+PROMPT_LIBRARY_BASE_URL=http://qoteon-prompt-library:3000
+PROMPT_LIBRARY_AUTH_TOKEN=
+PROMPT_RUNNER_BASE_URL=http://qoteon-prompt-runner-api:3000
+PROMPT_RUNNER_AUTH_TOKEN=
+```
+
+Auth env vars are only needed when `AUTH_MODE=supabase`:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-supabase-anon-key
 ```

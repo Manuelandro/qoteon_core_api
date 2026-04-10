@@ -9,16 +9,19 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "db:migrate": "sh -c 'set -a; if [ -f ./.env ]; then . ./.env; fi; set +a; for file in ./supabase/migrations/*.sql; do [ -f \"$file\" ] || continue; \"${PSQL_BIN:-psql}\" \"$DATABASE_URL\" -f \"$file\"; done'",
     "start": "node dist/src/server.js",
     "test": "npm run build && node --test dist/test/**/*.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",
     "fastify": "^5.2.1",
+    "pg": "^8.16.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
+    "@types/pg": "^8.15.4",
     "typescript": "^5.8.3"
   }
 }
