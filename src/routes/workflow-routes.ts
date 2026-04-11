@@ -56,7 +56,7 @@ export async function register_workflow_routes(
     const body = parse_schema(prompt_generation_request_schema, request.body);
 
     return services.orchestration_service.regenerate_project_prompts(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       body,
     );
@@ -68,7 +68,7 @@ export async function register_workflow_routes(
 
     return {
       prompts: await services.orchestration_service.list_project_prompts(
-        request.current_user.user_id,
+        request.current_user,
         params.project_id,
         query,
       ),
@@ -79,7 +79,7 @@ export async function register_workflow_routes(
     const params = parse_schema(prompt_set_params_schema, request.params);
 
     return services.orchestration_service.get_prompt_set_summary(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       params.run_type,
     );
@@ -89,7 +89,7 @@ export async function register_workflow_routes(
     const params = parse_schema(prompt_params_schema, request.params);
 
     return services.orchestration_service.activate_prompt(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       params.prompt_id,
     );
@@ -99,7 +99,7 @@ export async function register_workflow_routes(
     const params = parse_schema(prompt_params_schema, request.params);
 
     return services.orchestration_service.deactivate_prompt(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       params.prompt_id,
     );
@@ -109,7 +109,7 @@ export async function register_workflow_routes(
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(launch_run_request_schema, request.body);
     const result = await services.workflow_request_service.launch_baseline_scan({
-      user_id: request.current_user.user_id,
+      user: request.current_user,
       project_id: params.project_id,
       ai_model_ids: body.ai_model_ids,
       metadata_json: body.metadata_json,
@@ -127,7 +127,7 @@ export async function register_workflow_routes(
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(launch_run_request_schema, request.body);
     const result = await services.workflow_request_service.launch_monthly_tracking({
-      user_id: request.current_user.user_id,
+      user: request.current_user,
       project_id: params.project_id,
       ai_model_ids: body.ai_model_ids,
       metadata_json: body.metadata_json,
@@ -145,7 +145,7 @@ export async function register_workflow_routes(
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(source_intelligence_crawl_request_schema, request.body);
     const result = await services.workflow_request_service.trigger_project_crawl({
-      user_id: request.current_user.user_id,
+      user: request.current_user,
       project_id: params.project_id,
       crawl_payload: body,
       idempotency_key: parse_idempotency_key(request.headers["idempotency-key"]),
@@ -170,7 +170,7 @@ export async function register_workflow_routes(
 
     return {
       crawl_runs: await services.orchestration_service.list_project_crawl_runs(
-        request.current_user.user_id,
+        request.current_user,
         params.project_id,
         query,
       ),
@@ -180,7 +180,7 @@ export async function register_workflow_routes(
   app.get("/projects/:project_id/source-intelligence/prompt-context", async (request) => {
     const params = parse_schema(project_params_schema, request.params);
     return services.orchestration_service.get_project_prompt_context(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
     );
   });
@@ -191,7 +191,7 @@ export async function register_workflow_routes(
 
     return {
       run_batches: await services.orchestration_service.list_project_run_batches(
-        request.current_user.user_id,
+        request.current_user,
         params.project_id,
         query,
       ),
@@ -201,7 +201,7 @@ export async function register_workflow_routes(
   app.get("/run-batches/:run_batch_id", async (request) => {
     const params = parse_schema(run_batch_params_schema, request.params);
     return services.orchestration_service.get_run_batch(
-      request.current_user.user_id,
+      request.current_user,
       params.run_batch_id,
     );
   });
@@ -209,7 +209,7 @@ export async function register_workflow_routes(
   app.get("/run-batches/:run_batch_id/progress", async (request) => {
     const params = parse_schema(run_batch_params_schema, request.params);
     return services.orchestration_service.get_run_progress(
-      request.current_user.user_id,
+      request.current_user,
       params.run_batch_id,
     );
   });
@@ -220,7 +220,7 @@ export async function register_workflow_routes(
 
     return {
       executions: await services.orchestration_service.list_executions(
-        request.current_user.user_id,
+        request.current_user,
         params.run_batch_id,
         query,
       ),
@@ -231,7 +231,7 @@ export async function register_workflow_routes(
     const params = parse_schema(execution_retry_params_schema, request.params);
 
     return services.orchestration_service.retry_execution(
-      request.current_user.user_id,
+      request.current_user,
       params.run_batch_id,
       params.execution_id,
     );

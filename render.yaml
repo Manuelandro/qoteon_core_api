@@ -16,13 +16,15 @@ services:
         value: "10000"
       - key: CORE_TRUST_PROXY
         value: "true"
-      - key: AUTH_MODE
-        value: supabase
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_SSL_MODE
         value: no-verify
-      - key: DATABASE_CA_CERT_PATH
+      - key: DATABASE_SSL_CA_FILE
+        sync: false
+      - key: DATABASE_SSL_CERT_FILE
+        sync: false
+      - key: DATABASE_SSL_KEY_FILE
         sync: false
       - key: SUPABASE_URL
         sync: false

@@ -32,6 +32,7 @@ import {
 } from "../../src/domain/core";
 import { DashboardLayerClient } from "../../src/clients/dashboard-layer-client";
 import { NotFoundError } from "../../src/errors/app-error";
+import { AccessActor, resolve_access_actor } from "../../src/lib/access-actor";
 import { PromptLibraryClient } from "../../src/clients/prompt-library-client";
 import { PromptRunnerClient } from "../../src/clients/prompt-runner-client";
 import { SourceIntelligenceClient } from "../../src/clients/source-intelligence-client";
@@ -541,8 +542,9 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
     | null = null;
   last_run_results_request: { user_id: string; run_batch_id: string } | null = null;
 
-  async get_project_overview(user_id: string, project_id: string): Promise<DashboardProjectOverview> {
-    this.last_overview_request = { user_id, project_id };
+  async get_project_overview(user: AccessActor, project_id: string): Promise<DashboardProjectOverview> {
+    const actor = resolve_access_actor(user);
+    this.last_overview_request = { user_id: actor.user_id, project_id };
     this.throw_if_needed();
 
     if (!this.project_overview_response) {
@@ -553,20 +555,22 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   }
 
   async list_portfolio_projects(
-    user_id: string,
+    user: AccessActor,
     filters?: DashboardProjectsFilters,
   ): Promise<DashboardProjectCard[]> {
-    this.last_portfolio_request = { user_id, filters };
+    const actor = resolve_access_actor(user);
+    this.last_portfolio_request = { user_id: actor.user_id, filters };
     this.throw_if_needed();
     return this.portfolio_projects_response;
   }
 
   async get_visibility_summary(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: DashboardBaseFilters,
   ): Promise<DashboardVisibilitySummary> {
-    this.last_visibility_request = { user_id, project_id, filters };
+    const actor = resolve_access_actor(user);
+    this.last_visibility_request = { user_id: actor.user_id, project_id, filters };
     this.throw_if_needed();
 
     if (!this.visibility_summary_response) {
@@ -577,11 +581,12 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   }
 
   async get_model_breakdown(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: DashboardModelsFilters,
   ): Promise<DashboardModelBreakdown> {
-    this.last_model_request = { user_id, project_id, filters };
+    const actor = resolve_access_actor(user);
+    this.last_model_request = { user_id: actor.user_id, project_id, filters };
     this.throw_if_needed();
 
     if (!this.model_breakdown_response) {
@@ -592,11 +597,12 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   }
 
   async get_cluster_breakdown(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: DashboardClustersFilters,
   ): Promise<DashboardClusterBreakdown> {
-    this.last_cluster_request = { user_id, project_id, filters };
+    const actor = resolve_access_actor(user);
+    this.last_cluster_request = { user_id: actor.user_id, project_id, filters };
     this.throw_if_needed();
 
     if (!this.cluster_breakdown_response) {
@@ -607,11 +613,12 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   }
 
   async get_competitor_breakdown(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: DashboardCompetitorsFilters,
   ): Promise<DashboardCompetitorBreakdown> {
-    this.last_competitor_request = { user_id, project_id, filters };
+    const actor = resolve_access_actor(user);
+    this.last_competitor_request = { user_id: actor.user_id, project_id, filters };
     this.throw_if_needed();
 
     if (!this.competitor_breakdown_response) {
@@ -622,11 +629,12 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   }
 
   async get_trends(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: DashboardTrendsFilters,
   ): Promise<DashboardTrends> {
-    this.last_trends_request = { user_id, project_id, filters };
+    const actor = resolve_access_actor(user);
+    this.last_trends_request = { user_id: actor.user_id, project_id, filters };
     this.throw_if_needed();
 
     if (!this.trends_response) {
@@ -636,8 +644,9 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
     return this.trends_response;
   }
 
-  async get_run_results(user_id: string, run_batch_id: string): Promise<DashboardRunResults> {
-    this.last_run_results_request = { user_id, run_batch_id };
+  async get_run_results(user: AccessActor, run_batch_id: string): Promise<DashboardRunResults> {
+    const actor = resolve_access_actor(user);
+    this.last_run_results_request = { user_id: actor.user_id, run_batch_id };
     this.throw_if_needed();
 
     if (!this.run_results_response) {

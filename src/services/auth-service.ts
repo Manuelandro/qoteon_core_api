@@ -9,23 +9,6 @@ export interface AuthService {
   authenticate(request: FastifyRequest): Promise<AuthenticatedUser>;
 }
 
-export class StubAuthService implements AuthService {
-  async authenticate(request: FastifyRequest): Promise<AuthenticatedUser> {
-    const user_id = read_single_header(request.headers["x-user-id"]) ?? "stub-user";
-    const email = read_single_header(request.headers["x-user-email"]) ?? "stub@example.com";
-    const full_name = read_single_header(request.headers["x-user-name"]) ?? "Stub User";
-    const header_role = read_single_header(request.headers["x-user-role"]);
-    const role = is_user_role(header_role) ? header_role : "member";
-
-    return {
-      user_id,
-      email,
-      full_name,
-      role,
-    };
-  }
-}
-
 export class SupabaseAuthService implements AuthService {
   constructor(
     private readonly auth_client: SupabaseClient,
@@ -43,7 +26,7 @@ export class SupabaseAuthService implements AuthService {
     }
 
     const metadata = data.user.user_metadata ?? {};
-    const role = is_user_role(metadata.role) ? metadata.role : "member";
+    const role = is_user_role(metadata.role) ? metadata.role : "owner";
     const full_name =
       typeof metadata.full_name === "string"
         ? metadata.full_name
@@ -73,14 +56,6 @@ function extract_bearer_token(authorization?: string): string {
   }
 
   return authorization.slice("Bearer ".length).trim();
-}
-
-function read_single_header(value: string | string[] | undefined): string | undefined {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-
-  return value;
 }
 
 function is_user_role(value: unknown): value is UserRole {

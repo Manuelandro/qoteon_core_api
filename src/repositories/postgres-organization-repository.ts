@@ -72,6 +72,22 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
     }
   }
 
+  async list_all_organizations(): Promise<Organization[]> {
+    try {
+      const result = await this.pool.query<OrganizationRow>(
+        `
+          SELECT *
+          FROM public.core_organizations
+          ORDER BY created_at DESC
+        `,
+      );
+
+      return result.rows.map(map_organization);
+    } catch (error) {
+      throw_postgres_error(as_postgres_error(error), "Unable to list organizations");
+    }
+  }
+
   async list_organizations_for_user(user_id: string): Promise<Organization[]> {
     try {
       const result = await this.pool.query<OrganizationRow>(

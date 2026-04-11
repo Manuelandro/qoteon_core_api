@@ -1,4 +1,5 @@
 import { AuthenticatedUser, Organization } from "../domain/core";
+import { AccessActor, resolve_access_actor } from "../lib/access-actor";
 import { slugify } from "../lib/slug";
 import { OrganizationRepository } from "../repositories/organization-repository";
 
@@ -30,7 +31,13 @@ export class OrganizationService {
     return organization;
   }
 
-  async list_organizations_for_user(user_id: string): Promise<Organization[]> {
-    return this.organization_repository.list_organizations_for_user(user_id);
+  async list_organizations_for_user(user: AccessActor): Promise<Organization[]> {
+    const actor = resolve_access_actor(user);
+
+    if (actor.role === "admin") {
+      return this.organization_repository.list_all_organizations();
+    }
+
+    return this.organization_repository.list_organizations_for_user(actor.user_id);
   }
 }

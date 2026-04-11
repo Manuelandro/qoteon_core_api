@@ -1,41 +1,82 @@
 import fs from "node:fs";
+import type { ConnectionOptions } from "node:tls";
 
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 
 import { AppError, ConflictError } from "../errors/app-error";
 
-type DatabaseSslMode = "disable" | "require" | "no-verify";
+type DatabaseSslMode =
+  | "disable"
+  | "allow"
+  | "prefer"
+  | "require"
+  | "verify-ca"
+  | "verify-full"
+  | "no-verify";
 
 interface CreateDatabasePoolOptions {
   connection_string: string;
   ssl_mode?: DatabaseSslMode;
-  ca_cert_path?: string;
+  ssl_ca_file?: string;
+  ssl_cert_file?: string;
+  ssl_key_file?: string;
+}
+
+interface DatabaseCertificateFileOptions {
+  ssl_ca_file?: string;
+  ssl_cert_file?: string;
+  ssl_key_file?: string;
 }
 
 const SSL_QUERY_PARAMS = ["ssl", "sslcert", "sslkey", "sslmode", "sslrootcert", "uselibpqcompat"];
 
-function build_ssl_config(input: {
+function read_file_if_present(file_path: string | undefined): string | undefined {
+  if (!file_path) {
+    return undefined;
+  }
+
+  return fs.readFileSync(file_path, "utf8");
+}
+
+function load_client_certificate_options(input: DatabaseCertificateFileOptions): Pick<
+  ConnectionOptions,
+  "ca" | "cert" | "key"
+> {
+  return {
+    ca: read_file_if_present(input.ssl_ca_file),
+    cert: read_file_if_present(input.ssl_cert_file),
+    key: read_file_if_present(input.ssl_key_file),
+  };
+}
+
+/**
+ * PostgreSQL libpq sslmode semantics do not map 1:1 onto node-postgres.
+ * For this service:
+ * - disable => plain connection
+ * - require / no-verify / allow / prefer => TLS without CA validation
+ * - verify-ca / verify-full => TLS with CA validation
+ */
+export function build_ssl_config(input: {
   ssl_mode: DatabaseSslMode;
-  ca_cert_path?: string;
+  ssl_ca_file?: string;
+  ssl_cert_file?: string;
+  ssl_key_file?: string;
 }): PoolConfig["ssl"] | undefined {
+  const certificate_options = load_client_certificate_options(input);
+
   if (input.ssl_mode === "disable") {
     return undefined;
   }
 
-  if (input.ssl_mode === "no-verify") {
+  if (["require", "no-verify", "allow", "prefer"].includes(input.ssl_mode)) {
     return {
+      ...certificate_options,
       rejectUnauthorized: false,
     };
   }
 
-  if (input.ca_cert_path) {
-    return {
-      rejectUnauthorized: true,
-      ca: fs.readFileSync(input.ca_cert_path, "utf8"),
-    };
-  }
-
   return {
+    ...certificate_options,
     rejectUnauthorized: true,
   };
 }
@@ -59,7 +100,9 @@ export function create_database_pool(input: CreateDatabasePoolOptions): Pool {
     connectionString: sanitize_connection_string(input.connection_string),
     ssl: build_ssl_config({
       ssl_mode: input.ssl_mode ?? "no-verify",
-      ...(input.ca_cert_path ? { ca_cert_path: input.ca_cert_path } : {}),
+      ...(input.ssl_ca_file ? { ssl_ca_file: input.ssl_ca_file } : {}),
+      ...(input.ssl_cert_file ? { ssl_cert_file: input.ssl_cert_file } : {}),
+      ...(input.ssl_key_file ? { ssl_key_file: input.ssl_key_file } : {}),
     }),
     max: 10,
   });

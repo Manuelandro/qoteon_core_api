@@ -14,6 +14,7 @@ Production-minded Core API / orchestration service for Qoteon.
 
 - Implemented:
   - project and competitor CRUD
+  - two-role authorization model with `owner` tenant scope and `admin` global org/project scope
   - automatic post-crawl prompt generation owned by Prompt Library after Source Intelligence readiness notification, with manual regeneration still available through Core
   - crawl-target bootstrap and crawl-run orchestration through Source Intelligence
   - run launch orchestration through Prompt Runner
@@ -23,6 +24,7 @@ Production-minded Core API / orchestration service for Qoteon.
   - dashboard portfolio, overview, KPI, trend, and run-result proxy routes through Dashboard Layer
   - project-level source-intelligence status, persisted client crawl pass flags, prompt-context readiness, and prompt-context read routes
   - partial-success handling when downstream orchestration fails after project creation
+  - standardized shared database TLS env support through `DATABASE_SSL_MODE` plus optional `DATABASE_SSL_CA_FILE`, `DATABASE_SSL_CERT_FILE`, and `DATABASE_SSL_KEY_FILE`
 - Deferred:
   - proxying parser summary reads through Core
 
@@ -36,14 +38,22 @@ Production-minded Core API / orchestration service for Qoteon.
 - Zod
 - Native `node:test`
 
-## Local auth modes
+## Auth model
 
-- `AUTH_MODE=stub`
-  - Default for local development and tests
-  - Reads `x-user-id`, `x-user-email`, `x-user-name`, and `x-user-role`
-- `AUTH_MODE=supabase`
-  - Verifies Bearer tokens with Supabase Auth
-  - Upserts the authenticated user into `public.core_users` through Postgres
+- Core always verifies `Authorization: Bearer <supabase_access_token>` with Supabase Auth
+- On successful auth, Core upserts the authenticated user into `public.core_users`
+- There is no local stub mode anymore; local and production now use the same auth path
+
+## Role model
+
+- `owner`
+  - default end-user role
+  - can create organizations and operate on projects inside organizations they belong to
+- `admin`
+  - platform-wide operator role
+  - can list every organization and access every project-backed workflow in the database without org membership
+
+The legacy `member` role is no longer part of the runtime contract. Existing `member` rows are migrated to `owner`.
 
 ## Downstream service assumptions
 
@@ -111,22 +121,16 @@ If your Render services expose different paths behind those internal hosts, upda
 - The Core API expects to reach Prompt Runner API at `qoteon-prompt-runner-api:3000`.
 - The Core API expects to reach Dashboard Layer at `qoteon-dashboard-layer:4020`.
 - Set `DASHBOARD_LAYER_AUTH_TOKEN` in Core and `INTERNAL_AUTH_TOKEN` in Dashboard Layer to the same private value.
-- Core forwards `x-qoteon-user-id` to Dashboard Layer so the dashboard service can re-check tenant access.
+- Core forwards `x-qoteon-user-id` and `x-qoteon-user-role` to Dashboard Layer so the dashboard service can re-check tenant access with the same owner/admin scope.
 - Override `SOURCE_INTELLIGENCE_BASE_URL`, `PROMPT_LIBRARY_BASE_URL`, `PROMPT_RUNNER_BASE_URL`, or `DASHBOARD_LAYER_BASE_URL` only if you intentionally change those internal service names or ports.
 
 ## API routes
 
 All routes except `GET /health` require authentication.
 
-Database access for all local Core API tables is done through PostgreSQL using `DATABASE_URL`. Supabase client usage is limited to auth token verification when `AUTH_MODE=supabase`.
+Database access for all local Core API tables is done through PostgreSQL using `DATABASE_URL`.
 
-- In `AUTH_MODE=stub`, pass:
-  - `x-user-id`
-  - `x-user-email`
-  - Optional: `x-user-name`
-  - Optional: `x-user-role`
-- In `AUTH_MODE=supabase`, pass:
-  - `Authorization: Bearer <supabase_access_token>`
+- Pass `Authorization: Bearer <supabase_access_token>`
 
 ### Health
 
@@ -140,7 +144,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
 #### `GET /organizations`
 
 - Payload: none
-- What it does: lists organizations the current user belongs to.
+- What it does: lists organizations visible to the current user. `owner` sees only org memberships. `admin` sees every organization.
 
 #### `POST /organizations`
 
@@ -214,7 +218,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
 
 - Notes:
   - Both query params are optional.
-- What it does: lists projects visible to the current user, optionally filtered by organization and project status.
+- What it does: lists projects visible to the current user, optionally filtered by organization and project status. `admin` can query across every organization.
 
 #### `GET /projects/:project_id`
 
@@ -759,8 +763,12 @@ Required database env vars:
 ```bash
 DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.<project-ref>.supabase.co:5432/postgres
 DATABASE_SSL_MODE=no-verify
-DATABASE_CA_CERT_PATH=
+DATABASE_SSL_CA_FILE=
+DATABASE_SSL_CERT_FILE=
+DATABASE_SSL_KEY_FILE=
 ```
+
+The service still accepts the older `DATABASE_CA_CERT_PATH` variable as a backward-compatible alias for `DATABASE_SSL_CA_FILE`.
 
 Downstream service env vars:
 
@@ -789,9 +797,11 @@ CORE_IDEMPOTENCY_IMPLICIT_TTL_SECONDS=45
 CORE_IDEMPOTENCY_REQUIRE_HEADER=false
 ```
 
-Auth env vars are only needed when `AUTH_MODE=supabase`:
+Auth env vars are always required:
 
 ```bash
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
+
+The checked-in [`.env.example`](/Users/manuelpalma/Work/Personals/qoteon/qoteon_core_api/.env.example) now defaults to the documented local values and includes a `local` and `production` comment above every variable so the expected deployment value is visible in one place.

@@ -1,6 +1,6 @@
 export const PLAN_TYPES = ["starter", "growth", "enterprise"] as const;
-export const USER_ROLES = ["owner", "admin", "member"] as const;
-export const ORGANIZATION_ROLES = ["owner", "admin", "member"] as const;
+export const USER_ROLES = ["owner", "admin"] as const;
+export const ORGANIZATION_ROLES = ["owner", "admin"] as const;
 export const PROJECT_STATUSES = ["draft", "active", "paused", "archived"] as const;
 export const RUN_TYPES = ["baseline", "monthly_tracking"] as const;
 export const DASHBOARD_RUN_TYPES = ["baseline", "monthly_tracking", "experiment", "custom"] as const;

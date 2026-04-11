@@ -1,8 +1,8 @@
 import { build_app } from "../../src/app";
 import { read_env } from "../../src/config/env";
-import { Organization, Project, PromptRecord, RunProgress, RunType } from "../../src/domain/core";
+import { AuthenticatedUser, Organization, Project, PromptRecord, RunProgress, RunType } from "../../src/domain/core";
 import { DashboardService } from "../../src/services/dashboard-service";
-import { StubAuthService } from "../../src/services/auth-service";
+import { AuthService } from "../../src/services/auth-service";
 import { OrchestrationService } from "../../src/services/orchestration-service";
 import { OrganizationService } from "../../src/services/organization-service";
 import { ProjectService } from "../../src/services/project-service";
@@ -23,6 +23,28 @@ import {
   WorkflowRequestService,
 } from "../../src/services/workflow-request-service";
 
+class TestAuthService implements AuthService {
+  private current_user: AuthenticatedUser = {
+    user_id: "user-1",
+    email: "user-1@example.com",
+    full_name: "Test User",
+    role: "owner",
+  };
+
+  set_current_user(user: Partial<AuthenticatedUser> & Pick<AuthenticatedUser, "user_id">): void {
+    this.current_user = {
+      user_id: user.user_id,
+      email: user.email ?? this.current_user.email ?? `${user.user_id}@example.com`,
+      full_name: user.full_name ?? this.current_user.full_name ?? "Test User",
+      role: user.role ?? this.current_user.role ?? "owner",
+    };
+  }
+
+  async authenticate(): Promise<AuthenticatedUser> {
+    return this.current_user;
+  }
+}
+
 export function create_test_context() {
   const organization_repository = new InMemoryOrganizationRepository();
   const project_repository = new InMemoryProjectRepository();
@@ -30,6 +52,7 @@ export function create_test_context() {
   const prompt_runner_client = new FakePromptRunnerClient();
   const source_intelligence_client = new FakeSourceIntelligenceClient();
   const dashboard_layer_client = new FakeDashboardLayerClient();
+  const auth_service = new TestAuthService();
 
   const organization_service = new OrganizationService(organization_repository);
   const project_service = new ProjectService(organization_repository, project_repository);
@@ -57,7 +80,7 @@ export function create_test_context() {
   );
 
   const services: AppServices = {
-    auth_service: new StubAuthService(),
+    auth_service,
     organization_service,
     project_service,
     dashboard_service,
@@ -77,12 +100,16 @@ export function create_test_context() {
       source_intelligence_client,
       dashboard_layer_client,
     },
+    set_current_user(user: Partial<AuthenticatedUser> & Pick<AuthenticatedUser, "user_id">) {
+      auth_service.set_current_user(user);
+    },
     async build_app(env_overrides: Record<string, string> = {}) {
       const app = build_app({
         logger: false,
         env: read_env({
-          AUTH_MODE: "stub",
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres",
+          SUPABASE_URL: "https://example.supabase.co",
+          SUPABASE_ANON_KEY: "test-anon-key",
           ...env_overrides,
         }),
         services,

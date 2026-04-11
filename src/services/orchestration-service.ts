@@ -18,6 +18,7 @@ import {
   SetupProjectResult,
 } from "../domain/core";
 import { ConflictError, ValidationError } from "../errors/app-error";
+import { AccessActor } from "../lib/access-actor";
 import { to_service_warning } from "../lib/warnings";
 import { PromptLibraryClient } from "../clients/prompt-library-client";
 import { PromptRunnerClient } from "../clients/prompt-runner-client";
@@ -48,8 +49,8 @@ export class OrchestrationService {
     private readonly dashboard_service: DashboardService,
   ) {}
 
-  async setup_project(user_id: string, input: SetupProjectRequest): Promise<SetupProjectResult> {
-    const project = await this.project_service.create_project(user_id, {
+  async setup_project(user: AccessActor, input: SetupProjectRequest): Promise<SetupProjectResult> {
+    const project = await this.project_service.create_project(user, {
       organization_id: input.organization_id,
       name: input.name,
       domain: input.domain,
@@ -61,7 +62,7 @@ export class OrchestrationService {
     });
 
     const competitors = input.competitors?.length
-      ? await this.project_service.create_competitors(user_id, project.id, input.competitors)
+      ? await this.project_service.create_competitors(user, project.id, input.competitors)
       : [];
     const warnings = await this.bootstrap_source_intelligence(project.id);
 
@@ -93,11 +94,11 @@ export class OrchestrationService {
   }
 
   async regenerate_project_prompts(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     payload: PromptGenerationPayload,
   ): Promise<PromptGenerationResult> {
-    const project = await this.project_service.assert_project_access(user_id, project_id);
+    const project = await this.project_service.assert_project_access(user, project_id);
     const prompt_context = await this.source_intelligence_client.get_prompt_context(project_id);
 
     if (!prompt_context.is_ready_for_prompt_generation) {
@@ -112,7 +113,7 @@ export class OrchestrationService {
       );
     }
 
-    const competitors = await this.project_service.list_competitors(user_id, project_id);
+    const competitors = await this.project_service.list_competitors(user, project_id);
 
     return this.prompt_library_client.generate_project_prompts(
       project_id,
@@ -121,20 +122,20 @@ export class OrchestrationService {
   }
 
   async list_project_prompts(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: PromptListFilters,
   ): Promise<PromptRecord[]> {
-    await this.project_service.assert_project_access(user_id, project_id);
+    await this.project_service.assert_project_access(user, project_id);
     return this.prompt_library_client.list_project_prompts(project_id, filters);
   }
 
   async get_prompt_set_summary(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     run_type: RunType,
   ): Promise<PromptSetSummary> {
-    await this.project_service.assert_project_access(user_id, project_id);
+    await this.project_service.assert_project_access(user, project_id);
     const prompt_set = await this.prompt_library_client.get_prompt_set(project_id, run_type);
 
     return {
@@ -145,78 +146,78 @@ export class OrchestrationService {
     };
   }
 
-  async activate_prompt(user_id: string, project_id: string, prompt_id: string): Promise<PromptRecord> {
-    await this.project_service.assert_project_access(user_id, project_id);
+  async activate_prompt(user: AccessActor, project_id: string, prompt_id: string): Promise<PromptRecord> {
+    await this.project_service.assert_project_access(user, project_id);
     return this.prompt_library_client.activate_prompt(project_id, prompt_id);
   }
 
   async deactivate_prompt(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     prompt_id: string,
   ): Promise<PromptRecord> {
-    await this.project_service.assert_project_access(user_id, project_id);
+    await this.project_service.assert_project_access(user, project_id);
     return this.prompt_library_client.deactivate_prompt(project_id, prompt_id);
   }
 
   async launch_baseline_scan(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     ai_model_ids: string[],
     metadata_json?: Record<string, unknown>,
   ): Promise<LaunchRunResult> {
-    return this.launch_run(user_id, project_id, "baseline", ai_model_ids, metadata_json);
+    return this.launch_run(user, project_id, "baseline", ai_model_ids, metadata_json);
   }
 
   async launch_monthly_tracking(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     ai_model_ids: string[],
     metadata_json?: Record<string, unknown>,
   ): Promise<LaunchRunResult> {
-    return this.launch_run(user_id, project_id, "monthly_tracking", ai_model_ids, metadata_json);
+    return this.launch_run(user, project_id, "monthly_tracking", ai_model_ids, metadata_json);
   }
 
   async list_project_run_batches(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: ListRunBatchesFilters,
   ): Promise<RunBatch[]> {
-    await this.project_service.assert_project_access(user_id, project_id);
+    await this.project_service.assert_project_access(user, project_id);
     return this.prompt_runner_client.list_run_batches(project_id, filters);
   }
 
-  async get_run_batch(user_id: string, run_batch_id: string): Promise<RunBatch> {
+  async get_run_batch(user: AccessActor, run_batch_id: string): Promise<RunBatch> {
     const run_batch = await this.prompt_runner_client.get_run_batch(run_batch_id);
-    await this.project_service.assert_project_access(user_id, run_batch.project_id);
+    await this.project_service.assert_project_access(user, run_batch.project_id);
     return run_batch;
   }
 
-  async get_run_progress(user_id: string, run_batch_id: string): Promise<RunProgress> {
-    const run_batch = await this.get_run_batch(user_id, run_batch_id);
+  async get_run_progress(user: AccessActor, run_batch_id: string): Promise<RunProgress> {
+    const run_batch = await this.get_run_batch(user, run_batch_id);
     return this.prompt_runner_client.get_run_progress(run_batch.id);
   }
 
   async list_executions(
-    user_id: string,
+    user: AccessActor,
     run_batch_id: string,
     filters?: ListExecutionsFilters,
   ): Promise<ExecutionRecord[]> {
-    const run_batch = await this.get_run_batch(user_id, run_batch_id);
+    const run_batch = await this.get_run_batch(user, run_batch_id);
     return this.prompt_runner_client.list_executions(run_batch.id, filters);
   }
 
   async retry_execution(
-    user_id: string,
+    user: AccessActor,
     run_batch_id: string,
     execution_id: string,
   ): Promise<ExecutionRecord> {
-    await this.get_run_batch(user_id, run_batch_id);
+    await this.get_run_batch(user, run_batch_id);
     return this.prompt_runner_client.retry_execution(execution_id);
   }
 
   async trigger_project_crawl(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     input: {
       target_scope?: "client" | "competitors" | "all";
@@ -227,7 +228,7 @@ export class OrchestrationService {
       single_url?: string;
     },
   ) {
-    await this.project_service.assert_project_access(user_id, project_id);
+    await this.project_service.assert_project_access(user, project_id);
 
     return this.source_intelligence_client.create_crawl_runs(project_id, {
       ...input,
@@ -236,31 +237,31 @@ export class OrchestrationService {
   }
 
   async list_project_crawl_runs(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     filters?: { status?: string; limit?: number },
   ) {
-    await this.project_service.assert_project_access(user_id, project_id);
+    await this.project_service.assert_project_access(user, project_id);
     return this.source_intelligence_client.list_crawl_runs(project_id, filters);
   }
 
-  async get_project_prompt_context(user_id: string, project_id: string) {
-    await this.project_service.assert_project_access(user_id, project_id);
+  async get_project_prompt_context(user: AccessActor, project_id: string) {
+    await this.project_service.assert_project_access(user, project_id);
     return this.source_intelligence_client.get_prompt_context(project_id);
   }
 
-  async get_project_overview(user_id: string, project_id: string) {
-    return this.dashboard_service.get_project_overview(user_id, project_id);
+  async get_project_overview(user: AccessActor, project_id: string) {
+    return this.dashboard_service.get_project_overview(user, project_id);
   }
 
   private async launch_run(
-    user_id: string,
+    user: AccessActor,
     project_id: string,
     run_type: RunType,
     ai_model_ids: string[],
     metadata_json?: Record<string, unknown>,
   ): Promise<LaunchRunResult> {
-    await this.project_service.assert_project_access(user_id, project_id);
+    await this.project_service.assert_project_access(user, project_id);
 
     const prompt_set = await this.prompt_library_client.get_prompt_set(project_id, run_type);
 

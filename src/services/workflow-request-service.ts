@@ -8,6 +8,7 @@ import {
   SourceIntelligenceCrawlRun,
 } from "../domain/core";
 import { ConflictError, TooManyRequestsError, ValidationError } from "../errors/app-error";
+import { AccessActor, resolve_access_actor } from "../lib/access-actor";
 import {
   BeginIdempotencyRecordResult,
   WorkflowIdempotencyOperation,
@@ -47,16 +48,18 @@ export class WorkflowRequestService {
 
   launch_baseline_scan(
     input: {
-      user_id: string;
+      user: AccessActor;
       project_id: string;
       ai_model_ids: string[];
       metadata_json?: Record<string, unknown>;
       idempotency_key?: string;
     },
   ): Promise<WorkflowResponse<LaunchRunResult>> {
+    const actor = resolve_access_actor(input.user);
+
     return this.execute_workflow<LaunchRunResult>({
       operation: "run_launch",
-      user_id: input.user_id,
+      user_id: actor.user_id,
       project_id: input.project_id,
       idempotency_key: input.idempotency_key,
       request_payload: {
@@ -66,7 +69,7 @@ export class WorkflowRequestService {
       },
       callback: () =>
         this.orchestration_service.launch_baseline_scan(
-          input.user_id,
+          input.user,
           input.project_id,
           input.ai_model_ids,
           input.metadata_json,
@@ -76,16 +79,18 @@ export class WorkflowRequestService {
 
   launch_monthly_tracking(
     input: {
-      user_id: string;
+      user: AccessActor;
       project_id: string;
       ai_model_ids: string[];
       metadata_json?: Record<string, unknown>;
       idempotency_key?: string;
     },
   ): Promise<WorkflowResponse<LaunchRunResult>> {
+    const actor = resolve_access_actor(input.user);
+
     return this.execute_workflow<LaunchRunResult>({
       operation: "run_launch",
-      user_id: input.user_id,
+      user_id: actor.user_id,
       project_id: input.project_id,
       idempotency_key: input.idempotency_key,
       request_payload: {
@@ -95,7 +100,7 @@ export class WorkflowRequestService {
       },
       callback: () =>
         this.orchestration_service.launch_monthly_tracking(
-          input.user_id,
+          input.user,
           input.project_id,
           input.ai_model_ids,
           input.metadata_json,
@@ -105,7 +110,7 @@ export class WorkflowRequestService {
 
   trigger_project_crawl(
     input: {
-      user_id: string;
+      user: AccessActor;
       project_id: string;
       crawl_payload: SourceIntelligenceCrawlRequest;
       idempotency_key?: string;
@@ -116,15 +121,17 @@ export class WorkflowRequestService {
       crawl_runs: SourceIntelligenceCrawlRun[];
     }>
   > {
+    const actor = resolve_access_actor(input.user);
+
     return this.execute_workflow({
       operation: "crawl_trigger",
-      user_id: input.user_id,
+      user_id: actor.user_id,
       project_id: input.project_id,
       idempotency_key: input.idempotency_key,
       request_payload: input.crawl_payload,
       callback: () =>
         this.orchestration_service.trigger_project_crawl(
-          input.user_id,
+          input.user,
           input.project_id,
           input.crawl_payload,
         ),

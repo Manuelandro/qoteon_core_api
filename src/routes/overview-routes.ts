@@ -28,7 +28,7 @@ export async function register_overview_routes(
     const params = parse_schema(project_params_schema, request.params);
 
     return services.dashboard_service.get_project_overview(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
     );
   });
@@ -36,7 +36,7 @@ export async function register_overview_routes(
   app.get("/dashboard/projects", async (request) => {
     const query = parse_schema(dashboard_projects_query_schema, request.query);
     const projects = await services.dashboard_service.list_dashboard_projects(
-      request.current_user.user_id,
+      request.current_user,
       query,
     );
 
@@ -48,7 +48,7 @@ export async function register_overview_routes(
     const query = parse_schema(dashboard_base_query_schema, request.query);
 
     return services.dashboard_service.get_visibility_summary(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       query,
     );
@@ -59,7 +59,7 @@ export async function register_overview_routes(
     const query = parse_schema(dashboard_models_query_schema, request.query);
 
     return services.dashboard_service.get_model_breakdown(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       query,
     );
@@ -70,7 +70,7 @@ export async function register_overview_routes(
     const query = parse_schema(dashboard_clusters_query_schema, request.query);
 
     return services.dashboard_service.get_cluster_breakdown(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       query,
     );
@@ -81,7 +81,7 @@ export async function register_overview_routes(
     const query = parse_schema(dashboard_competitors_query_schema, request.query);
 
     return services.dashboard_service.get_competitor_breakdown(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       query,
     );
@@ -92,7 +92,7 @@ export async function register_overview_routes(
     const query = parse_schema(dashboard_trends_query_schema, request.query);
 
     return services.dashboard_service.get_trends(
-      request.current_user.user_id,
+      request.current_user,
       params.project_id,
       query,
     );
@@ -102,7 +102,7 @@ export async function register_overview_routes(
     const params = parse_schema(run_batch_params_schema, request.params);
 
     return services.dashboard_service.get_run_results(
-      request.current_user.user_id,
+      request.current_user,
       params.run_batch_id,
     );
   });

@@ -12,7 +12,7 @@ export async function register_organization_routes(
 ): Promise<void> {
   app.get("/organizations", async (request) => {
     const organizations = await services.organization_service.list_organizations_for_user(
-      request.current_user.user_id,
+      request.current_user,
     );
 
     return { organizations };

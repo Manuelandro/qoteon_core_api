@@ -19,7 +19,7 @@ import { PostgresUserRepository } from "./repositories/postgres-user-repository"
 import { PostgresWorkflowIdempotencyRepository } from "./repositories/postgres-workflow-idempotency-repository";
 import { ProjectRepository } from "./repositories/project-repository";
 import { UserRepository } from "./repositories/user-repository";
-import { AuthService, StubAuthService, SupabaseAuthService } from "./services/auth-service";
+import { AuthService, SupabaseAuthService } from "./services/auth-service";
 import { DashboardService } from "./services/dashboard-service";
 import { OrchestrationService } from "./services/orchestration-service";
 import { OrganizationService } from "./services/organization-service";
@@ -47,7 +47,9 @@ export function create_app_runtime(env: Env): AppRuntime {
   const pool = create_database_pool({
     connection_string: env.DATABASE_URL,
     ssl_mode: env.DATABASE_SSL_MODE,
-    ...(env.DATABASE_CA_CERT_PATH ? { ca_cert_path: env.DATABASE_CA_CERT_PATH } : {}),
+    ...(env.DATABASE_SSL_CA_FILE ? { ssl_ca_file: env.DATABASE_SSL_CA_FILE } : {}),
+    ...(env.DATABASE_SSL_CERT_FILE ? { ssl_cert_file: env.DATABASE_SSL_CERT_FILE } : {}),
+    ...(env.DATABASE_SSL_KEY_FILE ? { ssl_key_file: env.DATABASE_SSL_KEY_FILE } : {}),
   });
 
   const services = create_app_services(env, pool);
@@ -97,10 +99,10 @@ export function create_app_services(env: Env, pool: Pool): AppServices {
     }),
   );
 
-  const auth_service: AuthService =
-    env.AUTH_MODE === "supabase"
-      ? new SupabaseAuthService(create_supabase_auth_client(env), user_repository)
-      : new StubAuthService();
+  const auth_service: AuthService = new SupabaseAuthService(
+    create_supabase_auth_client(env),
+    user_repository,
+  );
 
   const organization_service = new OrganizationService(organization_repository);
   const project_service = new ProjectService(organization_repository, project_repository);

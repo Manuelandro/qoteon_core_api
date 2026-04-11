@@ -69,6 +69,10 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
     return this.organizations.get(organization_id) ?? null;
   }
 
+  async list_all_organizations(): Promise<Organization[]> {
+    return [...this.organizations.values()];
+  }
+
   async list_organizations_for_user(user_id: string): Promise<Organization[]> {
     const organization_ids = [...this.memberships.values()]
       .filter((membership) => membership.user_id === user_id)

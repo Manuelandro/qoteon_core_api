@@ -212,6 +212,10 @@ test("project access is denied when the user does not belong to the organization
   const organization = await context.seed_organization("user-1");
   const project = await context.seed_project("user-1", organization.id);
   const app = await context.build_app();
+  context.set_current_user({
+    user_id: "user-2",
+    email: "outsider@example.com",
+  });
   t.after(async () => {
     await app.close();
   });
@@ -227,6 +231,34 @@ test("project access is denied when the user does not belong to the organization
 
   assert.equal(response.statusCode, 403);
   assert.equal(response.json().error.code, "forbidden");
+});
+
+test("admin can access a project without organization membership", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+  const app = await context.build_app();
+  context.set_current_user({
+    user_id: "admin-user",
+    email: "admin@example.com",
+    role: "admin",
+  });
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/projects/${project.id}`,
+    headers: {
+      "x-user-id": "admin-user",
+      "x-user-email": "admin@example.com",
+      "x-user-role": "admin",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().id, project.id);
 });
 
 test("source intelligence routes proxy manual crawl triggers and prompt-context reads", async (t) => {
