@@ -14,6 +14,11 @@ Production-minded Core API / orchestration service for Qoteon.
 
 - Implemented:
   - project and competitor CRUD
+  - plan catalog and resolved entitlement snapshots for `trial`, `starter`, `growth`, and `enterprise`
+  - default self-serve organization creation on `trial`
+  - Core-owned usage counters for tracked prompts, LLM responses, article drafts, page improvements, and crawled pages
+  - compute-access enforcement for expired trials or inactive paid periods
+  - project/domain, competitor, tracked-model, prompt-set, and response-quota checks before crawl and run orchestration
   - onboarding competitor prefill orchestration that asks Prompt Runner for 5 structured competitors, persists them in Core-owned records, and re-enqueues competitor crawls in Source Intelligence
   - two-role authorization model with `owner` tenant scope and `admin` global org/project scope
   - automatic post-crawl prompt generation owned by Prompt Library after Source Intelligence readiness notification, with manual regeneration still available through Core
@@ -157,13 +162,13 @@ Database access for all local Core API tables is done through PostgreSQL using `
 {
   "name": "Acme",
   "slug": "acme",
-  "plan_type": "starter"
+  "plan_type": "trial"
 }
 ```
 
 - Notes:
   - `slug` is optional.
-  - `plan_type` is optional and defaults to `starter`.
+  - `plan_type` is optional and defaults to `trial`.
 - What it does: creates an organization and adds the current user as an `owner`.
 
 ### Projects
@@ -425,7 +430,8 @@ Database access for all local Core API tables is done through PostgreSQL using `
 ```
 
 - Notes:
-  - `run_type` must be `baseline` or `monthly_tracking`.
+  - `run_type` must be `baseline` or `daily_tracking`.
+  - `monthly_tracking` is still accepted as a legacy alias and normalizes to `daily_tracking`.
 - What it does: returns a lightweight prompt set summary for the requested run type.
 
 #### `POST /projects/:project_id/prompts/:prompt_id/activate`
@@ -555,7 +561,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
   - Creates a run batch in Prompt Runner.
   - Returns prompt set info plus the created run batch.
 
-#### `POST /projects/:project_id/runs/monthly-tracking`
+#### `POST /projects/:project_id/runs/daily-tracking`
 
 - Path params:
 
@@ -571,7 +577,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
 {
   "ai_model_ids": ["gpt-5.4"],
   "metadata_json": {
-    "source": "monthly_cycle"
+    "source": "daily_cycle"
   }
 }
 ```
@@ -582,9 +588,14 @@ Database access for all local Core API tables is done through PostgreSQL using `
   - `Idempotency-Key` is supported and strongly recommended. Repeating the same key with the same payload returns the stored response and sets `x-idempotent-replay: true`.
 - What it does:
   - Validates project access.
-  - Fetches the `monthly_tracking` prompt set from Prompt Library.
+  - Fetches the `daily_tracking` prompt set from Prompt Library.
   - Creates a run batch in Prompt Runner.
   - Returns prompt set info plus the created run batch.
+
+#### `POST /projects/:project_id/runs/monthly-tracking`
+
+- Compatibility alias for `POST /projects/:project_id/runs/daily-tracking`.
+- Uses the same idempotent workflow and normalizes to the canonical `daily_tracking` run type.
 
 #### `GET /projects/:project_id/run-batches`
 
@@ -610,7 +621,8 @@ Database access for all local Core API tables is done through PostgreSQL using `
 
 - Notes:
   - All query params are optional.
-  - `run_type` must be `baseline` or `monthly_tracking` when present.
+  - `run_type` must be `baseline` or `daily_tracking` when present.
+  - `monthly_tracking` is still accepted as a legacy alias and normalizes to `daily_tracking`.
 - What it does: lists run batches for the project, filtered by status, run type, and date range when supplied.
 
 #### `GET /run-batches/:run_batch_id`

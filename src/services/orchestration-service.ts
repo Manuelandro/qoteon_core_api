@@ -26,6 +26,7 @@ import { PromptLibraryClient } from "../clients/prompt-library-client";
 import { PromptRunnerClient } from "../clients/prompt-runner-client";
 import { SourceIntelligenceClient } from "../clients/source-intelligence-client";
 import { DashboardService } from "./dashboard-service";
+import { EntitlementService } from "./entitlement-service";
 import { ProjectService } from "./project-service";
 
 export interface SetupProjectRequest {
@@ -49,9 +50,20 @@ export class OrchestrationService {
     private readonly prompt_runner_client: PromptRunnerClient,
     private readonly source_intelligence_client: SourceIntelligenceClient,
     private readonly dashboard_service: DashboardService,
+    private readonly entitlement_service: EntitlementService,
   ) {}
 
   async setup_project(user: AccessActor, input: SetupProjectRequest): Promise<SetupProjectResult> {
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      input.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "project_setup");
+
+    if (input.competitors?.length) {
+      this.entitlement_service.assert_competitor_limit(organization, input.competitors.length);
+    }
+
     const project = await this.project_service.create_project(user, {
       organization_id: input.organization_id,
       name: input.name,
@@ -101,6 +113,11 @@ export class OrchestrationService {
     payload: PromptGenerationPayload,
   ): Promise<PromptGenerationResult> {
     const project = await this.project_service.assert_project_access(user, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "prompt_generation");
     const prompt_context = await this.source_intelligence_client.get_prompt_context(project_id);
 
     if (!prompt_context.is_ready_for_prompt_generation) {
@@ -137,8 +154,20 @@ export class OrchestrationService {
     project_id: string,
     run_type: RunType,
   ): Promise<PromptSetSummary> {
-    await this.project_service.assert_project_access(user, project_id);
-    const prompt_set = await this.prompt_library_client.get_prompt_set(project_id, run_type);
+    const project = await this.project_service.assert_project_access(user, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    const prompt_set = await this.prompt_library_client.get_prompt_set(
+      project_id,
+      run_type,
+      run_type === "daily_tracking"
+        ? {
+            limit: this.entitlement_service.get_daily_tracking_prompt_limit(organization),
+          }
+        : undefined,
+    );
 
     return {
       project_id: prompt_set.project_id,
@@ -171,13 +200,22 @@ export class OrchestrationService {
     return this.launch_run(user, project_id, "baseline", ai_model_ids, metadata_json);
   }
 
+  async launch_daily_tracking(
+    user: AccessActor,
+    project_id: string,
+    ai_model_ids: string[],
+    metadata_json?: Record<string, unknown>,
+  ): Promise<LaunchRunResult> {
+    return this.launch_run(user, project_id, "daily_tracking", ai_model_ids, metadata_json);
+  }
+
   async launch_monthly_tracking(
     user: AccessActor,
     project_id: string,
     ai_model_ids: string[],
     metadata_json?: Record<string, unknown>,
   ): Promise<LaunchRunResult> {
-    return this.launch_run(user, project_id, "monthly_tracking", ai_model_ids, metadata_json);
+    return this.launch_daily_tracking(user, project_id, ai_model_ids, metadata_json);
   }
 
   async list_project_run_batches(
@@ -230,7 +268,12 @@ export class OrchestrationService {
       single_url?: string;
     },
   ) {
-    await this.project_service.assert_project_access(user, project_id);
+    const project = await this.project_service.assert_project_access(user, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "crawl_trigger");
 
     return this.source_intelligence_client.create_crawl_runs(project_id, {
       ...input,
@@ -269,6 +312,11 @@ export class OrchestrationService {
     project_id: string,
   ): Promise<PrefillProjectCompetitorsResult> {
     const project = await this.project_service.assert_project_access(user, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "project_setup");
     const existingCompetitors = await this.project_service.list_competitors(user, project_id);
 
     if (existingCompetitors.length > 0) {
@@ -312,53 +360,125 @@ export class OrchestrationService {
     ai_model_ids: string[],
     metadata_json?: Record<string, unknown>,
   ): Promise<LaunchRunResult> {
-    await this.project_service.assert_project_access(user, project_id);
+    const project = await this.project_service.assert_project_access(user, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "run_launch");
+    this.entitlement_service.assert_tracked_model_limit(organization, ai_model_ids.length);
 
-    const prompt_set = await this.prompt_library_client.get_prompt_set(project_id, run_type);
+    const prompt_set = await this.prompt_library_client.get_prompt_set(
+      project_id,
+      run_type,
+      run_type === "daily_tracking"
+        ? {
+            limit: this.entitlement_service.get_daily_tracking_prompt_limit(organization),
+          }
+        : undefined,
+    );
 
     if (prompt_set.prompt_ids.length === 0) {
       throw new ValidationError("No prompts are available for this run type");
     }
 
-    const project_prompts = await this.prompt_library_client.list_project_prompts(project_id, {
-      is_active: true,
-    });
-    const prompts_by_id = new Map(project_prompts.map((prompt) => [prompt.id, prompt]));
-    const selected_prompts = prompt_set.prompt_ids.map((prompt_id) => {
-      const prompt = prompts_by_id.get(prompt_id);
+    const reserved_period_keys: Partial<Record<"tracked_prompts_daily" | "llm_responses", string>> = {};
+    let tracked_prompts_reserved = 0;
+    let llm_responses_reserved = 0;
 
-      if (!prompt?.body) {
-        throw new ValidationError(`Prompt ${prompt_id} is not available for execution`);
+    try {
+      if (run_type === "daily_tracking") {
+        const tracking_counter = await this.entitlement_service.consume_metered_quota(
+          organization,
+          "tracked_prompts_daily",
+          prompt_set.prompt_ids.length,
+        );
+        reserved_period_keys.tracked_prompts_daily = tracking_counter.period.period_key;
+        tracked_prompts_reserved = prompt_set.prompt_ids.length;
       }
 
-      return prompt;
-    });
-    const synced_prompts = await this.prompt_runner_client.sync_project_prompts(
-      project_id,
-      selected_prompts,
-    );
-    const runner_prompt_ids = prompt_set.prompt_ids.map((prompt_id) => {
-      const synced_prompt = synced_prompts.find((entry) => entry.source_prompt_id === prompt_id);
-
-      if (!synced_prompt) {
-        throw new ValidationError(`Prompt ${prompt_id} could not be synchronized to the runner`);
+      const projected_response_count = prompt_set.prompt_ids.length * ai_model_ids.length;
+      const response_counter = await this.entitlement_service.consume_metered_quota(
+        organization,
+        "llm_responses",
+        projected_response_count,
+      );
+      reserved_period_keys.llm_responses = response_counter.period.period_key;
+      llm_responses_reserved = projected_response_count;
+    } catch (error) {
+      if (reserved_period_keys.tracked_prompts_daily && tracked_prompts_reserved > 0) {
+        await this.entitlement_service.release_metered_quota(
+          organization,
+          "tracked_prompts_daily",
+          tracked_prompts_reserved,
+          reserved_period_keys.tracked_prompts_daily,
+        );
       }
 
-      return synced_prompt.runner_prompt_id;
-    });
+      throw error;
+    }
 
-    const run_batch = await this.prompt_runner_client.create_run_batch(
-      project_id,
-      run_type,
-      runner_prompt_ids,
-      ai_model_ids,
-      metadata_json,
-    );
+    try {
+      const project_prompts = await this.prompt_library_client.list_project_prompts(project_id, {
+        is_active: true,
+      });
+      const prompts_by_id = new Map(project_prompts.map((prompt) => [prompt.id, prompt]));
+      const selected_prompts = prompt_set.prompt_ids.map((prompt_id) => {
+        const prompt = prompts_by_id.get(prompt_id);
 
-    return {
-      prompt_set,
-      run_batch,
-    };
+        if (!prompt?.body) {
+          throw new ValidationError(`Prompt ${prompt_id} is not available for execution`);
+        }
+
+        return prompt;
+      });
+      const synced_prompts = await this.prompt_runner_client.sync_project_prompts(
+        project_id,
+        selected_prompts,
+      );
+      const runner_prompt_ids = prompt_set.prompt_ids.map((prompt_id) => {
+        const synced_prompt = synced_prompts.find((entry) => entry.source_prompt_id === prompt_id);
+
+        if (!synced_prompt) {
+          throw new ValidationError(`Prompt ${prompt_id} could not be synchronized to the runner`);
+        }
+
+        return synced_prompt.runner_prompt_id;
+      });
+
+      const run_batch = await this.prompt_runner_client.create_run_batch(
+        project_id,
+        run_type,
+        runner_prompt_ids,
+        ai_model_ids,
+        metadata_json,
+      );
+
+      return {
+        prompt_set,
+        run_batch,
+      };
+    } catch (error) {
+      if (reserved_period_keys.llm_responses && llm_responses_reserved > 0) {
+        await this.entitlement_service.release_metered_quota(
+          organization,
+          "llm_responses",
+          llm_responses_reserved,
+          reserved_period_keys.llm_responses,
+        );
+      }
+
+      if (reserved_period_keys.tracked_prompts_daily && tracked_prompts_reserved > 0) {
+        await this.entitlement_service.release_metered_quota(
+          organization,
+          "tracked_prompts_daily",
+          tracked_prompts_reserved,
+          reserved_period_keys.tracked_prompts_daily,
+        );
+      }
+
+      throw error;
+    }
   }
 
   private async bootstrap_source_intelligence(project_id: string): Promise<SetupProjectResult["warnings"]> {
@@ -467,7 +587,7 @@ function normalize_suggested_competitors(
       };
     })
     .filter((competitor): competitor is CreateCompetitorInput => Boolean(competitor))
-    .slice(0, 5);
+    .slice(0, 3);
 }
 
 function build_prompt_generation_payload(

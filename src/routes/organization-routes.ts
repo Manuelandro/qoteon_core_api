@@ -25,7 +25,7 @@ export async function register_organization_routes(
       {
         name: body.name,
         slug: body.slug,
-        plan_type: body.plan_type ?? "starter",
+        plan_type: body.plan_type ?? "trial",
       },
     );
 

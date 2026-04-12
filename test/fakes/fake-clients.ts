@@ -105,7 +105,11 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
     });
   }
 
-  async get_prompt_set(project_id: string, run_type: RunType): Promise<PromptSet> {
+  async get_prompt_set(
+    project_id: string,
+    run_type: RunType,
+    filters?: { limit?: number },
+  ): Promise<PromptSet> {
     if (this.fail_get_prompt_set) {
       throw this.fail_get_prompt_set;
     }
@@ -116,7 +120,16 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
       throw new NotFoundError("Prompt set not found");
     }
 
-    return prompt_set;
+    if (filters?.limit === undefined || prompt_set.prompt_ids.length <= filters.limit) {
+      return prompt_set;
+    }
+
+    return {
+      ...prompt_set,
+      prompt_ids: prompt_set.prompt_ids.slice(0, filters.limit),
+      prompt_count: Math.min(prompt_set.prompt_count, filters.limit),
+      active_prompt_count: Math.min(prompt_set.active_prompt_count, filters.limit),
+    };
   }
 
   async activate_prompt(project_id: string, prompt_id: string): Promise<PromptRecord> {
@@ -166,7 +179,7 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
       .filter((prompt) => prompt.is_active)
       .map((prompt) => prompt.id);
 
-    for (const run_type of ["baseline", "monthly_tracking"] as const) {
+    for (const run_type of ["baseline", "daily_tracking"] as const) {
       this.prompt_sets.set(this.prompt_set_key(project_id, run_type), {
         project_id,
         run_type,
@@ -239,16 +252,6 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
           name: "Competitor Three",
           website: "https://competitor-three.example",
           icon: "https://www.google.com/s2/favicons?domain=competitor-three.example&sz=64",
-        },
-        {
-          name: "Competitor Four",
-          website: "https://competitor-four.example",
-          icon: "https://www.google.com/s2/favicons?domain=competitor-four.example&sz=64",
-        },
-        {
-          name: "Competitor Five",
-          website: "https://competitor-five.example",
-          icon: "https://www.google.com/s2/favicons?domain=competitor-five.example&sz=64",
         },
       ]
     );

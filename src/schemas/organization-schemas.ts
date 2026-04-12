@@ -6,7 +6,7 @@ import { organization_schema } from "./common";
 export const create_organization_request_schema = z.object({
   name: z.string().min(1),
   slug: z.string().min(1).optional(),
-  plan_type: z.enum(PLAN_TYPES).default("starter"),
+  plan_type: z.enum(PLAN_TYPES).default("trial"),
 });
 
 export const list_organizations_response_schema = z.object({

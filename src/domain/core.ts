@@ -1,13 +1,20 @@
-export const PLAN_TYPES = ["starter", "growth", "enterprise"] as const;
+export const PLAN_TYPES = ["trial", "starter", "growth", "enterprise"] as const;
+export const ORGANIZATION_BILLING_STATUSES = [
+  "trialing",
+  "active",
+  "expired",
+  "cancelled",
+] as const;
 export const USER_ROLES = ["owner", "admin"] as const;
 export const ORGANIZATION_ROLES = ["owner", "admin"] as const;
 export const PROJECT_STATUSES = ["draft", "active", "paused", "archived"] as const;
-export const RUN_TYPES = ["baseline", "monthly_tracking"] as const;
-export const DASHBOARD_RUN_TYPES = ["baseline", "monthly_tracking", "experiment", "custom"] as const;
+export const RUN_TYPES = ["baseline", "daily_tracking"] as const;
+export const DASHBOARD_RUN_TYPES = ["baseline", "daily_tracking", "experiment", "custom"] as const;
 export const DASHBOARD_TREND_DIRECTIONS = ["up", "down", "flat", "unavailable"] as const;
 export const DASHBOARD_HEALTH_FLAG_SEVERITIES = ["info", "warning", "critical"] as const;
 
 export type PlanType = (typeof PLAN_TYPES)[number];
+export type OrganizationBillingStatus = (typeof ORGANIZATION_BILLING_STATUSES)[number];
 export type UserRole = (typeof USER_ROLES)[number];
 export type OrganizationRole = (typeof ORGANIZATION_ROLES)[number];
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
@@ -15,12 +22,34 @@ export type RunType = (typeof RUN_TYPES)[number];
 export type DashboardRunType = (typeof DASHBOARD_RUN_TYPES)[number];
 export type DashboardTrendDirection = (typeof DASHBOARD_TREND_DIRECTIONS)[number];
 export type DashboardHealthFlagSeverity = (typeof DASHBOARD_HEALTH_FLAG_SEVERITIES)[number];
+export type MeteredQuotaKey =
+  | "tracked_prompts_daily"
+  | "llm_responses"
+  | "article_drafts"
+  | "page_improvements"
+  | "crawled_pages";
 
 export interface Organization {
   id: string;
   name: string;
   slug: string;
   plan_type: PlanType;
+  billing_status: OrganizationBillingStatus;
+  project_limit: number;
+  competitor_limit: number;
+  tracked_model_limit: number;
+  tracked_prompts_daily_limit: number;
+  llm_response_limit: number;
+  article_draft_limit: number;
+  page_improvement_limit: number;
+  crawled_page_limit: number;
+  data_retention_months: number | null;
+  trial_started_at: string | null;
+  trial_expires_at: string | null;
+  billing_period_started_at: string | null;
+  billing_period_ends_at: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -77,6 +106,32 @@ export interface CreateOrganizationInput {
   name: string;
   slug: string;
   plan_type: PlanType;
+  billing_status: OrganizationBillingStatus;
+  project_limit: number;
+  competitor_limit: number;
+  tracked_model_limit: number;
+  tracked_prompts_daily_limit: number;
+  llm_response_limit: number;
+  article_draft_limit: number;
+  page_improvement_limit: number;
+  crawled_page_limit: number;
+  data_retention_months: number | null;
+  trial_started_at?: string | null;
+  trial_expires_at?: string | null;
+  billing_period_started_at?: string | null;
+  billing_period_ends_at?: string | null;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+}
+
+export interface OrganizationUsageCounter {
+  id: string;
+  organization_id: string;
+  quota_key: MeteredQuotaKey;
+  period_key: string;
+  used_count: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CreateProjectInput {
@@ -374,7 +429,7 @@ export interface DashboardTrends {
   };
   comparisons: {
     latestVsPreviousRun: DashboardSummaryComparison | null;
-    latestMonthlyVsPreviousMonthly: DashboardSummaryComparison | null;
+    latestDailyVsPreviousDaily: DashboardSummaryComparison | null;
     baselineVsLatest: DashboardSummaryComparison | null;
   };
 }

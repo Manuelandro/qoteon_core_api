@@ -2,7 +2,9 @@ import {
   CreateCompetitorInput,
   CreateProjectInput,
   ListProjectsFilters,
+  MeteredQuotaKey,
   Organization,
+  OrganizationUsageCounter,
   OrganizationUser,
   Project,
   ProjectCompetitor,
@@ -14,8 +16,10 @@ import {
   AddOrganizationUserInput,
   OrganizationRepository,
 } from "../../src/repositories/organization-repository";
+import { OrganizationUsageRepository } from "../../src/repositories/organization-usage-repository";
 import { ProjectRepository } from "../../src/repositories/project-repository";
 import { UpsertUserInput, UserRepository } from "../../src/repositories/user-repository";
+import { ConflictError } from "../../src/errors/app-error";
 
 export class InMemoryUserRepository implements UserRepository {
   private readonly users = new Map<string, User>();
@@ -51,12 +55,44 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
     name: string;
     slug: string;
     plan_type: Organization["plan_type"];
+    billing_status: Organization["billing_status"];
+    project_limit: number;
+    competitor_limit: number;
+    tracked_model_limit: number;
+    tracked_prompts_daily_limit: number;
+    llm_response_limit: number;
+    article_draft_limit: number;
+    page_improvement_limit: number;
+    crawled_page_limit: number;
+    data_retention_months: number | null;
+    trial_started_at?: string | null;
+    trial_expires_at?: string | null;
+    billing_period_started_at?: string | null;
+    billing_period_ends_at?: string | null;
+    stripe_customer_id?: string | null;
+    stripe_subscription_id?: string | null;
   }): Promise<Organization> {
     const organization: Organization = {
       id: `org-${++this.organization_counter}`,
       name: input.name,
       slug: input.slug,
       plan_type: input.plan_type,
+      billing_status: input.billing_status,
+      project_limit: input.project_limit,
+      competitor_limit: input.competitor_limit,
+      tracked_model_limit: input.tracked_model_limit,
+      tracked_prompts_daily_limit: input.tracked_prompts_daily_limit,
+      llm_response_limit: input.llm_response_limit,
+      article_draft_limit: input.article_draft_limit,
+      page_improvement_limit: input.page_improvement_limit,
+      crawled_page_limit: input.crawled_page_limit,
+      data_retention_months: input.data_retention_months,
+      trial_started_at: input.trial_started_at ?? null,
+      trial_expires_at: input.trial_expires_at ?? null,
+      billing_period_started_at: input.billing_period_started_at ?? null,
+      billing_period_ends_at: input.billing_period_ends_at ?? null,
+      stripe_customer_id: input.stripe_customer_id ?? null,
+      stripe_subscription_id: input.stripe_subscription_id ?? null,
       created_at: now(),
       updated_at: now(),
     };
@@ -105,6 +141,80 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
 
   private membership_key(organization_id: string, user_id: string): string {
     return `${organization_id}:${user_id}`;
+  }
+}
+
+export class InMemoryOrganizationUsageRepository implements OrganizationUsageRepository {
+  private readonly counters = new Map<string, OrganizationUsageCounter>();
+  private counter = 0;
+
+  async get_usage_counter(
+    organization_id: string,
+    quota_key: MeteredQuotaKey,
+    period_key: string,
+  ): Promise<OrganizationUsageCounter | null> {
+    return this.counters.get(this.key(organization_id, quota_key, period_key)) ?? null;
+  }
+
+  async consume_usage(
+    organization_id: string,
+    quota_key: MeteredQuotaKey,
+    period_key: string,
+    amount: number,
+    limit: number,
+  ): Promise<OrganizationUsageCounter> {
+    const key = this.key(organization_id, quota_key, period_key);
+    const existing = this.counters.get(key) ?? this.create_counter(organization_id, quota_key, period_key);
+
+    if (existing.used_count + amount > limit) {
+      throw new ConflictError("Quota exceeded", {
+        organization_id,
+        quota_key,
+        period_key,
+        limit,
+        used_count: existing.used_count,
+        requested_amount: amount,
+      });
+    }
+
+    existing.used_count += amount;
+    existing.updated_at = now();
+    this.counters.set(key, existing);
+    return existing;
+  }
+
+  async release_usage(
+    organization_id: string,
+    quota_key: MeteredQuotaKey,
+    period_key: string,
+    amount: number,
+  ): Promise<OrganizationUsageCounter> {
+    const key = this.key(organization_id, quota_key, period_key);
+    const existing = this.counters.get(key) ?? this.create_counter(organization_id, quota_key, period_key);
+    existing.used_count = Math.max(existing.used_count - amount, 0);
+    existing.updated_at = now();
+    this.counters.set(key, existing);
+    return existing;
+  }
+
+  private create_counter(
+    organization_id: string,
+    quota_key: MeteredQuotaKey,
+    period_key: string,
+  ): OrganizationUsageCounter {
+    return {
+      id: `usage-${++this.counter}`,
+      organization_id,
+      quota_key,
+      period_key,
+      used_count: 0,
+      created_at: now(),
+      updated_at: now(),
+    };
+  }
+
+  private key(organization_id: string, quota_key: MeteredQuotaKey, period_key: string): string {
+    return `${organization_id}:${quota_key}:${period_key}`;
   }
 }
 

@@ -13,7 +13,9 @@ import { Env } from "./config/env";
 import { create_database_pool } from "./db/postgres";
 import { create_supabase_auth_client } from "./lib/supabase-auth";
 import { OrganizationRepository } from "./repositories/organization-repository";
+import { OrganizationUsageRepository } from "./repositories/organization-usage-repository";
 import { PostgresOrganizationRepository } from "./repositories/postgres-organization-repository";
+import { PostgresOrganizationUsageRepository } from "./repositories/postgres-organization-usage-repository";
 import { PostgresProjectRepository } from "./repositories/postgres-project-repository";
 import { PostgresUserRepository } from "./repositories/postgres-user-repository";
 import { PostgresWorkflowIdempotencyRepository } from "./repositories/postgres-workflow-idempotency-repository";
@@ -21,6 +23,7 @@ import { ProjectRepository } from "./repositories/project-repository";
 import { UserRepository } from "./repositories/user-repository";
 import { AuthService, SupabaseAuthService } from "./services/auth-service";
 import { DashboardService } from "./services/dashboard-service";
+import { EntitlementService } from "./services/entitlement-service";
 import { OrchestrationService } from "./services/orchestration-service";
 import { OrganizationService } from "./services/organization-service";
 import { ProjectService } from "./services/project-service";
@@ -65,6 +68,8 @@ export function create_app_runtime(env: Env): AppRuntime {
 export function create_app_services(env: Env, pool: Pool): AppServices {
   const user_repository: UserRepository = new PostgresUserRepository(pool);
   const organization_repository: OrganizationRepository = new PostgresOrganizationRepository(pool);
+  const organization_usage_repository: OrganizationUsageRepository =
+    new PostgresOrganizationUsageRepository(pool);
   const project_repository: ProjectRepository = new PostgresProjectRepository(pool);
 
   const prompt_library_client: PromptLibraryClient = new HttpPromptLibraryClient(
@@ -104,8 +109,13 @@ export function create_app_services(env: Env, pool: Pool): AppServices {
     user_repository,
   );
 
+  const entitlement_service = new EntitlementService(organization_usage_repository);
   const organization_service = new OrganizationService(organization_repository);
-  const project_service = new ProjectService(organization_repository, project_repository);
+  const project_service = new ProjectService(
+    organization_repository,
+    project_repository,
+    entitlement_service,
+  );
   const dashboard_service = new DashboardService(
     project_service,
     prompt_runner_client,
@@ -117,6 +127,7 @@ export function create_app_services(env: Env, pool: Pool): AppServices {
     prompt_runner_client,
     source_intelligence_client,
     dashboard_service,
+    entitlement_service,
   );
   const workflow_idempotency_repository = new PostgresWorkflowIdempotencyRepository(pool);
   const workflow_concurrency_guard = new PostgresWorkflowConcurrencyGuard(pool);

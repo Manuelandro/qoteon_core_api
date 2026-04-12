@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  ORGANIZATION_BILLING_STATUSES,
   ORGANIZATION_ROLES,
   PLAN_TYPES,
   PROJECT_STATUSES,
@@ -17,6 +18,22 @@ export const organization_schema = z.object({
   name: z.string(),
   slug: z.string(),
   plan_type: z.enum(PLAN_TYPES),
+  billing_status: z.enum(ORGANIZATION_BILLING_STATUSES),
+  project_limit: z.number().int().nonnegative(),
+  competitor_limit: z.number().int().nonnegative(),
+  tracked_model_limit: z.number().int().nonnegative(),
+  tracked_prompts_daily_limit: z.number().int().nonnegative(),
+  llm_response_limit: z.number().int().nonnegative(),
+  article_draft_limit: z.number().int().nonnegative(),
+  page_improvement_limit: z.number().int().nonnegative(),
+  crawled_page_limit: z.number().int().nonnegative(),
+  data_retention_months: z.number().int().positive().nullable(),
+  trial_started_at: z.string().nullable(),
+  trial_expires_at: z.string().nullable(),
+  billing_period_started_at: z.string().nullable(),
+  billing_period_ends_at: z.string().nullable(),
+  stripe_customer_id: z.string().nullable(),
+  stripe_subscription_id: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
 });

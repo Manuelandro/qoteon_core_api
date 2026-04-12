@@ -77,7 +77,7 @@ export class WorkflowRequestService {
     });
   }
 
-  launch_monthly_tracking(
+  launch_daily_tracking(
     input: {
       user: AccessActor;
       project_id: string;
@@ -94,18 +94,30 @@ export class WorkflowRequestService {
       project_id: input.project_id,
       idempotency_key: input.idempotency_key,
       request_payload: {
-        run_type: "monthly_tracking",
+        run_type: "daily_tracking",
         ai_model_ids: input.ai_model_ids,
         metadata_json: input.metadata_json,
       },
       callback: () =>
-        this.orchestration_service.launch_monthly_tracking(
+        this.orchestration_service.launch_daily_tracking(
           input.user,
           input.project_id,
           input.ai_model_ids,
           input.metadata_json,
         ),
     });
+  }
+
+  launch_monthly_tracking(
+    input: {
+      user: AccessActor;
+      project_id: string;
+      ai_model_ids: string[];
+      metadata_json?: Record<string, unknown>;
+      idempotency_key?: string;
+    },
+  ): Promise<WorkflowResponse<LaunchRunResult>> {
+    return this.launch_daily_tracking(input);
   }
 
   trigger_project_crawl(

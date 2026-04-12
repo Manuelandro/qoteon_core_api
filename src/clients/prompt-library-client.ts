@@ -16,7 +16,11 @@ export interface PromptLibraryClient {
     project_id: string,
     filters?: PromptListFilters,
   ): Promise<PromptRecord[]>;
-  get_prompt_set(project_id: string, run_type: RunType): Promise<PromptSet>;
+  get_prompt_set(
+    project_id: string,
+    run_type: RunType,
+    filters?: { limit?: number },
+  ): Promise<PromptSet>;
   activate_prompt(project_id: string, prompt_id: string): Promise<PromptRecord>;
   deactivate_prompt(project_id: string, prompt_id: string): Promise<PromptRecord>;
 }

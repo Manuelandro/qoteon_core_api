@@ -3,6 +3,33 @@ import assert from "node:assert/strict";
 
 import { create_test_context } from "./helpers/test-context";
 
+test("organization creation defaults self-serve accounts to trial", async (t) => {
+  const context = create_test_context();
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/organizations",
+    headers: {
+      "x-user-id": "user-1",
+      "x-user-email": "owner@example.com",
+    },
+    payload: {
+      name: "Trial Org",
+    },
+  });
+
+  assert.equal(response.statusCode, 201);
+  const organization = response.json();
+  assert.equal(organization.plan_type, "trial");
+  assert.equal(organization.billing_status, "trialing");
+  assert.ok(organization.trial_started_at);
+  assert.ok(organization.trial_expires_at);
+});
+
 test("project creation route creates project, competitors, and defers prompt generation", async (t) => {
   const context = create_test_context();
   const app = await context.build_app();
@@ -207,6 +234,50 @@ test("competitor CRUD routes work end to end", async (t) => {
   assert.equal(final_list_response.json().competitors.length, 0);
 });
 
+test("starter plan competitor route rejects additions beyond three competitors", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  for (const suffix of ["one", "two", "three"]) {
+    const response = await app.inject({
+      method: "POST",
+      url: `/projects/${project.id}/competitors`,
+      headers: {
+        "x-user-id": "user-1",
+      },
+      payload: {
+        competitor_name: `Rival ${suffix}`,
+        competitor_domain: `rival-${suffix}.example`,
+      },
+    });
+
+    assert.equal(response.statusCode, 201);
+  }
+
+  const fourthResponse = await app.inject({
+    method: "POST",
+    url: `/projects/${project.id}/competitors`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+    payload: {
+      competitor_name: "Rival Four",
+      competitor_domain: "rival-four.example",
+    },
+  });
+
+  assert.equal(fourthResponse.statusCode, 400);
+  assert.equal(
+    fourthResponse.json().error.message,
+    "The starter plan supports up to 3 competitors.",
+  );
+});
+
 test("competitor prefill route generates and persists onboarding competitors", async (t) => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
@@ -231,7 +302,7 @@ test("competitor prefill route generates and persists onboarding competitors", a
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().source, "generated");
-  assert.equal(response.json().competitors.length, 5);
+  assert.equal(response.json().competitors.length, 3);
 
   const listResponse = await app.inject({
     method: "GET",
@@ -242,7 +313,81 @@ test("competitor prefill route generates and persists onboarding competitors", a
   });
 
   assert.equal(listResponse.statusCode, 200);
-  assert.equal(listResponse.json().competitors.length, 5);
+  assert.equal(listResponse.json().competitors.length, 3);
+});
+
+test("starter project creation rejects more than three competitors", async (t) => {
+  const context = create_test_context();
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const organization_response = await app.inject({
+    method: "POST",
+    url: "/organizations",
+    headers: {
+      "x-user-id": "user-1",
+      "x-user-email": "owner@example.com",
+    },
+    payload: {
+      name: "Acme Org",
+      plan_type: "starter",
+    },
+  });
+
+  assert.equal(organization_response.statusCode, 201);
+  const organization = organization_response.json();
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/projects",
+    headers: {
+      "x-user-id": "user-1",
+      "x-user-email": "owner@example.com",
+    },
+    payload: {
+      organization_id: organization.id,
+      name: "Acme Project",
+      domain: "acme.com",
+      company_name: "Acme",
+      primary_category: "SaaS",
+      target_region: ["United States"],
+      target_language: "en",
+      competitors: [
+        {
+          competitor_name: "Rival One",
+          competitor_domain: "rival-one.example",
+        },
+        {
+          competitor_name: "Rival Two",
+          competitor_domain: "rival-two.example",
+        },
+        {
+          competitor_name: "Rival Three",
+          competitor_domain: "rival-three.example",
+        },
+        {
+          competitor_name: "Rival Four",
+          competitor_domain: "rival-four.example",
+        },
+      ],
+    },
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error.message, "The starter plan supports up to 3 competitors.");
+
+  const projectsResponse = await app.inject({
+    method: "GET",
+    url: `/projects?organization_id=${organization.id}`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+  });
+
+  assert.equal(projectsResponse.statusCode, 200);
+  assert.equal(projectsResponse.json().projects.length, 0);
 });
 
 test("competitor bootstrap route enqueues competitor crawl refreshes", async (t) => {

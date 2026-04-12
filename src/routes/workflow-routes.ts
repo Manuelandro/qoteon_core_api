@@ -2,7 +2,6 @@ import { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { AppServices } from "../build-services";
-import { run_type_schema } from "../schemas/common";
 import { parse_schema } from "../lib/validation";
 import {
   launch_run_request_schema,
@@ -25,7 +24,9 @@ const prompt_params_schema = z.object({
 
 const prompt_set_params_schema = z.object({
   project_id: z.string().min(1),
-  run_type: run_type_schema,
+  run_type: z
+    .enum(["baseline", "daily_tracking", "monthly_tracking"])
+    .transform((value) => (value === "monthly_tracking" ? "daily_tracking" : value)),
 });
 
 const run_batch_params_schema = z.object({
@@ -123,10 +124,28 @@ export async function register_workflow_routes(
     return reply.code(result.response_status_code).send(result.response_body);
   });
 
+  app.post("/projects/:project_id/runs/daily-tracking", async (request, reply) => {
+    const params = parse_schema(project_params_schema, request.params);
+    const body = parse_schema(launch_run_request_schema, request.body);
+    const result = await services.workflow_request_service.launch_daily_tracking({
+      user: request.current_user,
+      project_id: params.project_id,
+      ai_model_ids: body.ai_model_ids,
+      metadata_json: body.metadata_json,
+      idempotency_key: parse_idempotency_key(request.headers["idempotency-key"]),
+    });
+
+    if (result.replayed) {
+      reply.header("x-idempotent-replay", "true");
+    }
+
+    return reply.code(result.response_status_code).send(result.response_body);
+  });
+
   app.post("/projects/:project_id/runs/monthly-tracking", async (request, reply) => {
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(launch_run_request_schema, request.body);
-    const result = await services.workflow_request_service.launch_monthly_tracking({
+    const result = await services.workflow_request_service.launch_daily_tracking({
       user: request.current_user,
       project_id: params.project_id,
       ai_model_ids: body.ai_model_ids,

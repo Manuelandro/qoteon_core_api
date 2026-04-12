@@ -1,9 +1,4 @@
-import {
-  CreateOrganizationInput,
-  Organization,
-  OrganizationRole,
-  OrganizationUser,
-} from "../domain/core";
+import { CreateOrganizationInput, Organization, OrganizationRole, OrganizationUser } from "../domain/core";
 
 export interface AddOrganizationUserInput {
   organization_id: string;

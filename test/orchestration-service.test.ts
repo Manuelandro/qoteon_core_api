@@ -142,7 +142,7 @@ test("launch_baseline_scan creates a run batch from the baseline prompt set", as
   );
 });
 
-test("launch_monthly_tracking creates a run batch from the monthly prompt set", async () => {
+test("launch_daily_tracking creates a run batch from the daily prompt set", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
   const project = await context.seed_project("user-1", organization.id);
@@ -158,17 +158,265 @@ test("launch_monthly_tracking creates a run batch from the monthly prompt set", 
       intent: "tracking",
     },
   ]);
-  context.seed_prompt_set(project.id, "monthly_tracking", ["prompt-3"]);
+  context.seed_prompt_set(project.id, "daily_tracking", ["prompt-3"]);
 
-  const result = await context.services.orchestration_service.launch_monthly_tracking(
+  const result = await context.services.orchestration_service.launch_daily_tracking(
     "user-1",
     project.id,
     ["gpt-5.4"],
   );
 
-  assert.equal(result.prompt_set.run_type, "monthly_tracking");
-  assert.equal(result.run_batch.run_type, "monthly_tracking");
+  assert.equal(result.prompt_set.run_type, "daily_tracking");
+  assert.equal(result.run_batch.run_type, "daily_tracking");
   assert.equal(result.run_batch.execution_count, 1);
+});
+
+test("project creation is blocked when the organization reaches the domain limit", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+
+  await context.services.project_service.create_project("user-1", {
+    organization_id: organization.id,
+    name: "Project One",
+    domain: "one.example",
+    company_name: "One",
+    primary_category: "SaaS",
+    target_region: ["United States"],
+    target_language: "en",
+    status: "active",
+  });
+
+  await assert.rejects(
+    () =>
+      context.services.project_service.create_project("user-1", {
+        organization_id: organization.id,
+        name: "Project Two",
+        domain: "two.example",
+        company_name: "Two",
+        primary_category: "SaaS",
+        target_region: ["United States"],
+        target_language: "en",
+        status: "active",
+      }),
+    {
+      name: "ValidationError",
+      message: "The trial plan supports up to 1 domains.",
+    },
+  );
+});
+
+test("launch_baseline_scan rejects model counts above the plan limit", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "starter");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+  context.seed_prompt_set(project.id, "baseline", ["prompt-1"]);
+
+  await assert.rejects(
+    () =>
+      context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+        "gpt-5.4",
+        "claude-sonnet",
+        "gemini-2.5-pro",
+        "grok-4",
+      ]),
+    {
+      name: "ValidationError",
+      message: "The starter plan supports up to 3 tracked models per run.",
+    },
+  );
+});
+
+test("launch_daily_tracking caps the selected prompt set to the daily tracked prompt limit", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+
+  const prompts = Array.from({ length: 10 }, (_, index) => ({
+    id: `prompt-${index + 1}`,
+    project_id: project.id,
+    title: `Prompt ${index + 1}`,
+    status: "ready" as const,
+    is_active: true,
+    cluster: `cluster-${index + 1}`,
+    intent: "tracking",
+  }));
+
+  context.seed_prompts(project.id, prompts);
+  context.seed_prompt_set(
+    project.id,
+    "daily_tracking",
+    prompts.map((prompt) => prompt.id),
+  );
+
+  const result = await context.services.orchestration_service.launch_daily_tracking(
+    "user-1",
+    project.id,
+    ["gpt-5.4"],
+  );
+
+  assert.equal(result.prompt_set.prompt_count, 5);
+  assert.equal(result.run_batch.execution_count, 5);
+});
+
+test("llm response quota blocks later runs once the current period allowance is consumed", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+  const prompts = Array.from({ length: 450 }, (_, index) => ({
+    id: `prompt-${index + 1}`,
+    project_id: project.id,
+    title: `Prompt ${index + 1}`,
+    status: "ready" as const,
+    is_active: true,
+    cluster: `cluster-${index + 1}`,
+    intent: "tracking",
+  }));
+
+  context.seed_prompts(project.id, prompts);
+  context.seed_prompt_set(
+    project.id,
+    "baseline",
+    prompts.map((prompt) => prompt.id),
+  );
+
+  await context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+    "gpt-5.4",
+    "claude-sonnet",
+    "gemini-2.5-pro",
+  ]);
+
+  await assert.rejects(
+    () =>
+      context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+        "gpt-5.4",
+      ]),
+    {
+      name: "ConflictError",
+      message: "Quota exceeded",
+    },
+  );
+});
+
+test("llm response reservations are released when run creation fails", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+  const prompts = Array.from({ length: 450 }, (_, index) => ({
+    id: `prompt-${index + 1}`,
+    project_id: project.id,
+    title: `Prompt ${index + 1}`,
+    status: "ready" as const,
+    is_active: true,
+    cluster: `cluster-${index + 1}`,
+    intent: "tracking",
+  }));
+
+  context.seed_prompts(project.id, prompts);
+  context.seed_prompt_set(
+    project.id,
+    "baseline",
+    prompts.map((prompt) => prompt.id),
+  );
+  context.clients.prompt_runner_client.fail_create_run_batch = new Error("runner unavailable");
+
+  await assert.rejects(
+    () =>
+      context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+        "gpt-5.4",
+        "claude-sonnet",
+        "gemini-2.5-pro",
+      ]),
+    /runner unavailable/,
+  );
+
+  context.clients.prompt_runner_client.fail_create_run_batch = null;
+
+  const recovery = await context.services.orchestration_service.launch_baseline_scan(
+    "user-1",
+    project.id,
+    ["gpt-5.4"],
+  );
+
+  assert.equal(recovery.run_batch.execution_count, 450);
+});
+
+test("concurrent run launches do not oversubscribe the response quota", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+  const prompts = Array.from({ length: 300 }, (_, index) => ({
+    id: `prompt-${index + 1}`,
+    project_id: project.id,
+    title: `Prompt ${index + 1}`,
+    status: "ready" as const,
+    is_active: true,
+    cluster: `cluster-${index + 1}`,
+    intent: "tracking",
+  }));
+
+  context.seed_prompts(project.id, prompts);
+  context.seed_prompt_set(
+    project.id,
+    "baseline",
+    prompts.map((prompt) => prompt.id),
+  );
+  context.clients.prompt_runner_client.create_run_batch_delay_ms = 25;
+
+  const results = await Promise.allSettled([
+    context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+      "gpt-5.4",
+      "claude-sonnet",
+      "gemini-2.5-pro",
+    ]),
+    context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+      "gpt-5.4",
+      "claude-sonnet",
+      "gemini-2.5-pro",
+    ]),
+  ]);
+
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+});
+
+test("expired trials block compute actions but still allow Core reads", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial", {
+    trial_expires_at: "2026-04-01T00:00:00.000Z",
+    billing_status: "expired",
+  });
+
+  const organizations = await context.services.organization_service.list_organizations_for_user("user-1");
+  assert.equal(organizations.length, 1);
+
+  await assert.rejects(
+    () =>
+      context.services.orchestration_service.setup_project("user-1", {
+        organization_id: organization.id,
+        name: "Expired Trial Project",
+        domain: "expired.example",
+        company_name: "Expired",
+        primary_category: "SaaS",
+        target_region: ["United States"],
+        target_language: "en",
+      }),
+    {
+      name: "ConflictError",
+      message: "This organization can no longer run compute actions on the current plan.",
+    },
+  );
 });
 
 test("prefill_project_competitors generates competitors once and enqueues competitor crawls", async () => {
@@ -187,7 +435,7 @@ test("prefill_project_competitors generates competitors once and enqueues compet
   );
 
   assert.equal(result.source, "generated");
-  assert.equal(result.competitors.length, 5);
+  assert.equal(result.competitors.length, 3);
   assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
   assert.equal(
@@ -198,6 +446,53 @@ test("prefill_project_competitors generates competitors once and enqueues compet
     context.clients.prompt_runner_client.last_generate_competitor_suggestions_request?.company_name,
     "Acme",
   );
+});
+
+test("setup_project rejects competitor payloads beyond the starter plan cap", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+
+  await assert.rejects(
+    () =>
+      context.services.orchestration_service.setup_project("user-1", {
+        organization_id: organization.id,
+        name: "Acme Project",
+        domain: "acme.com",
+        company_name: "Acme",
+        primary_category: "SaaS",
+        target_region: ["United States"],
+        target_language: "en",
+        competitors: [
+          {
+            competitor_name: "Rival One",
+            competitor_domain: "rival-one.example",
+          },
+          {
+            competitor_name: "Rival Two",
+            competitor_domain: "rival-two.example",
+          },
+          {
+            competitor_name: "Rival Three",
+            competitor_domain: "rival-three.example",
+          },
+          {
+            competitor_name: "Rival Four",
+            competitor_domain: "rival-four.example",
+          },
+        ],
+      }),
+    {
+      name: "ValidationError",
+      code: "validation_error",
+      message: "The starter plan supports up to 3 competitors.",
+    },
+  );
+
+  const projects = await context.services.project_service.list_projects("user-1", {
+    organization_id: organization.id,
+  });
+
+  assert.equal(projects.length, 0);
 });
 
 test("prefill_project_competitors returns existing competitors without calling prompt runner again", async () => {

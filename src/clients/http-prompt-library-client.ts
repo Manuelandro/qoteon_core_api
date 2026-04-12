@@ -30,8 +30,14 @@ export class HttpPromptLibraryClient implements PromptLibraryClient {
     });
   }
 
-  async get_prompt_set(project_id: string, run_type: RunType): Promise<PromptSet> {
-    return this.client.request("GET", `/internal/projects/${project_id}/prompt-sets/${run_type}`);
+  async get_prompt_set(
+    project_id: string,
+    run_type: RunType,
+    filters?: { limit?: number },
+  ): Promise<PromptSet> {
+    return this.client.request("GET", `/internal/projects/${project_id}/prompt-sets/${run_type}`, {
+      query: filters,
+    });
   }
 
   async activate_prompt(project_id: string, prompt_id: string): Promise<PromptRecord> {

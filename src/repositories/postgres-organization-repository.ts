@@ -12,6 +12,22 @@ interface OrganizationRow {
   name: string;
   slug: string;
   plan_type: Organization["plan_type"];
+  billing_status: Organization["billing_status"];
+  project_limit: number;
+  competitor_limit: number;
+  tracked_model_limit: number;
+  tracked_prompts_daily_limit: number;
+  llm_response_limit: number;
+  article_draft_limit: number;
+  page_improvement_limit: number;
+  crawled_page_limit: number;
+  data_retention_months: number | null;
+  trial_started_at: Date | string | null;
+  trial_expires_at: Date | string | null;
+  billing_period_started_at: Date | string | null;
+  billing_period_ends_at: Date | string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -31,6 +47,22 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
     name: string;
     slug: string;
     plan_type: Organization["plan_type"];
+    billing_status: Organization["billing_status"];
+    project_limit: number;
+    competitor_limit: number;
+    tracked_model_limit: number;
+    tracked_prompts_daily_limit: number;
+    llm_response_limit: number;
+    article_draft_limit: number;
+    page_improvement_limit: number;
+    crawled_page_limit: number;
+    data_retention_months: number | null;
+    trial_started_at?: string | null;
+    trial_expires_at?: string | null;
+    billing_period_started_at?: string | null;
+    billing_period_ends_at?: string | null;
+    stripe_customer_id?: string | null;
+    stripe_subscription_id?: string | null;
   }): Promise<Organization> {
     try {
       const result = await this.pool.query<OrganizationRow>(
@@ -38,12 +70,48 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
           INSERT INTO public.core_organizations (
             name,
             slug,
-            plan_type
+            plan_type,
+            billing_status,
+            project_limit,
+            competitor_limit,
+            tracked_model_limit,
+            tracked_prompts_daily_limit,
+            llm_response_limit,
+            article_draft_limit,
+            page_improvement_limit,
+            crawled_page_limit,
+            data_retention_months,
+            trial_started_at,
+            trial_expires_at,
+            billing_period_started_at,
+            billing_period_ends_at,
+            stripe_customer_id,
+            stripe_subscription_id
           )
-          VALUES ($1, $2, $3)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
           RETURNING *
         `,
-        [input.name, input.slug, input.plan_type],
+        [
+          input.name,
+          input.slug,
+          input.plan_type,
+          input.billing_status,
+          input.project_limit,
+          input.competitor_limit,
+          input.tracked_model_limit,
+          input.tracked_prompts_daily_limit,
+          input.llm_response_limit,
+          input.article_draft_limit,
+          input.page_improvement_limit,
+          input.crawled_page_limit,
+          input.data_retention_months,
+          input.trial_started_at ?? null,
+          input.trial_expires_at ?? null,
+          input.billing_period_started_at ?? null,
+          input.billing_period_ends_at ?? null,
+          input.stripe_customer_id ?? null,
+          input.stripe_subscription_id ?? null,
+        ],
       );
 
       const row = result.rows[0];
@@ -164,6 +232,24 @@ function map_organization(row: OrganizationRow): Organization {
     name: row.name,
     slug: row.slug,
     plan_type: row.plan_type,
+    billing_status: row.billing_status,
+    project_limit: row.project_limit,
+    competitor_limit: row.competitor_limit,
+    tracked_model_limit: row.tracked_model_limit,
+    tracked_prompts_daily_limit: row.tracked_prompts_daily_limit,
+    llm_response_limit: row.llm_response_limit,
+    article_draft_limit: row.article_draft_limit,
+    page_improvement_limit: row.page_improvement_limit,
+    crawled_page_limit: row.crawled_page_limit,
+    data_retention_months: row.data_retention_months,
+    trial_started_at: row.trial_started_at ? to_iso_string(row.trial_started_at) : null,
+    trial_expires_at: row.trial_expires_at ? to_iso_string(row.trial_expires_at) : null,
+    billing_period_started_at: row.billing_period_started_at
+      ? to_iso_string(row.billing_period_started_at)
+      : null,
+    billing_period_ends_at: row.billing_period_ends_at ? to_iso_string(row.billing_period_ends_at) : null,
+    stripe_customer_id: row.stripe_customer_id,
+    stripe_subscription_id: row.stripe_subscription_id,
     created_at: to_iso_string(row.created_at),
     updated_at: to_iso_string(row.updated_at),
   };

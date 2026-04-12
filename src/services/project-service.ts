@@ -13,11 +13,13 @@ import { ForbiddenError, NotFoundError } from "../errors/app-error";
 import { AccessActor, resolve_access_actor } from "../lib/access-actor";
 import { OrganizationRepository } from "../repositories/organization-repository";
 import { ProjectRepository } from "../repositories/project-repository";
+import { EntitlementService } from "./entitlement-service";
 
 export class ProjectService {
   constructor(
     private readonly organization_repository: OrganizationRepository,
     private readonly project_repository: ProjectRepository,
+    private readonly entitlement_service: EntitlementService,
   ) {}
 
   async assert_organization_access(
@@ -57,7 +59,16 @@ export class ProjectService {
   }
 
   async create_project(user: AccessActor, input: CreateProjectInput): Promise<Project> {
-    await this.assert_organization_access(user, input.organization_id);
+    const { organization } = await this.assert_organization_access(user, input.organization_id);
+    const existing_projects = await this.project_repository.list_projects_by_organization_ids(
+      [organization.id],
+      {
+        organization_id: organization.id,
+      },
+    );
+
+    this.entitlement_service.assert_project_limit(organization, existing_projects.length + 1);
+
     return this.project_repository.create_project(input);
   }
 
@@ -104,7 +115,12 @@ export class ProjectService {
     project_id: string,
     input: CreateCompetitorInput,
   ): Promise<ProjectCompetitor> {
-    await this.assert_project_access(user, project_id);
+    const project = await this.assert_project_access(user, project_id);
+    const { organization } = await this.assert_organization_access(user, project.organization_id);
+    const existing_competitors = await this.project_repository.list_competitors(project_id);
+
+    this.entitlement_service.assert_competitor_limit(organization, existing_competitors.length + 1);
+
     return this.project_repository.create_competitor(project_id, input);
   }
 
@@ -113,7 +129,15 @@ export class ProjectService {
     project_id: string,
     inputs: CreateCompetitorInput[],
   ): Promise<ProjectCompetitor[]> {
-    await this.assert_project_access(user, project_id);
+    const project = await this.assert_project_access(user, project_id);
+    const { organization } = await this.assert_organization_access(user, project.organization_id);
+    const existing_competitors = await this.project_repository.list_competitors(project_id);
+
+    this.entitlement_service.assert_competitor_limit(
+      organization,
+      existing_competitors.length + inputs.length,
+    );
+
     return this.project_repository.create_competitors(project_id, inputs);
   }
 
