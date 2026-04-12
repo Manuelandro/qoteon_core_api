@@ -14,10 +14,12 @@ Production-minded Core API / orchestration service for Qoteon.
 
 - Implemented:
   - project and competitor CRUD
+  - onboarding competitor prefill orchestration that asks Prompt Runner for 5 structured competitors, persists them in Core-owned records, and re-enqueues competitor crawls in Source Intelligence
   - two-role authorization model with `owner` tenant scope and `admin` global org/project scope
   - automatic post-crawl prompt generation owned by Prompt Library after Source Intelligence readiness notification, with manual regeneration still available through Core
   - crawl-target bootstrap and crawl-run orchestration through Source Intelligence
   - run launch orchestration through Prompt Runner
+  - array-backed `target_region` project metadata flow across Core, Source Intelligence, Dashboard, and Prompt Library contracts
   - edge-facing admission controls with route-aware rate limiting and backpressure `429` responses for hot POST routes
   - per-user and per-project concurrency guards for run launch and crawl trigger workflows
   - workflow idempotency for run launch and crawl trigger routes, with replay support
@@ -94,6 +96,7 @@ Default internal paths assumed by the adapters:
   - `POST /internal/projects/:project_id/prompts/:prompt_id/activate`
   - `POST /internal/projects/:project_id/prompts/:prompt_id/deactivate`
 - Prompt Runner
+  - `POST /internal/projects/:project_id/competitor-suggestions`
   - `POST /internal/projects/:project_id/run-batches`
   - `GET /internal/projects/:project_id/run-batches`
   - `GET /internal/run-batches/:run_batch_id`
@@ -176,7 +179,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
   "domain": "acme.com",
   "company_name": "Acme",
   "primary_category": "SaaS",
-  "target_region": "US",
+  "target_region": ["Worldwide"],
   "target_language": "en",
   "status": "active",
   "competitors": [
@@ -251,7 +254,7 @@ Database access for all local Core API tables is done through PostgreSQL using `
   "domain": "new-domain.com",
   "company_name": "Acme Inc",
   "primary_category": "AI Software",
-  "target_region": "EU",
+  "target_region": ["Europe", "North America"],
   "target_language": "en",
   "status": "paused"
 }
@@ -285,6 +288,23 @@ Database access for all local Core API tables is done through PostgreSQL using `
 ```
 
 - What it does: creates a competitor row for the project.
+
+#### `POST /projects/:project_id/competitors/prefill`
+
+- Payload: none
+- What it does:
+  - loads the Core project metadata
+  - returns existing competitors immediately if the project already has them
+  - otherwise asks Prompt Runner for 5 structured onboarding competitors
+  - persists the returned competitors in `public.core_project_competitors`
+  - re-bootstraps Source Intelligence competitor targets and enqueues competitor crawls
+
+#### `POST /projects/:project_id/competitors/bootstrap`
+
+- Payload: none
+- What it does:
+  - re-bootstraps Source Intelligence competitor targets for the project
+  - enqueues competitor crawl runs so competitors added after project creation enter the crawl pipeline
 
 #### `GET /projects/:project_id/competitors`
 

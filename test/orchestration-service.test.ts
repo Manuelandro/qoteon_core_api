@@ -14,7 +14,7 @@ test("setup_project defers prompt generation until source intelligence is ready"
     domain: "acme.com",
     company_name: "Acme",
     primary_category: "SaaS",
-    target_region: "US",
+    target_region: ["United States"],
     target_language: "en",
     status: "active",
     competitors: [
@@ -171,6 +171,57 @@ test("launch_monthly_tracking creates a run batch from the monthly prompt set", 
   assert.equal(result.run_batch.execution_count, 1);
 });
 
+test("prefill_project_competitors generates competitors once and enqueues competitor crawls", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id, {
+    domain: "acme.com",
+    company_name: "Acme",
+    target_region: ["Europe"],
+    target_language: "English",
+  });
+
+  const result = await context.services.orchestration_service.prefill_project_competitors(
+    "user-1",
+    project.id,
+  );
+
+  assert.equal(result.source, "generated");
+  assert.equal(result.competitors.length, 5);
+  assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
+  assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
+  assert.equal(
+    context.clients.source_intelligence_client.crawl_runs_by_project.get(project.id)?.[0]?.trigger_type,
+    "project_setup",
+  );
+  assert.equal(
+    context.clients.prompt_runner_client.last_generate_competitor_suggestions_request?.company_name,
+    "Acme",
+  );
+});
+
+test("prefill_project_competitors returns existing competitors without calling prompt runner again", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+  await context.services.project_service.create_competitor("user-1", project.id, {
+    competitor_name: "Existing Rival",
+    competitor_domain: "existing-rival.example",
+  });
+
+  const result = await context.services.orchestration_service.prefill_project_competitors(
+    "user-1",
+    project.id,
+  );
+
+  assert.equal(result.source, "existing");
+  assert.equal(result.competitors.length, 1);
+  assert.equal(
+    context.clients.prompt_runner_client.last_generate_competitor_suggestions_request,
+    null,
+  );
+});
+
 test("setup_project returns partial_success when source intelligence bootstrap fails", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
@@ -182,7 +233,7 @@ test("setup_project returns partial_success when source intelligence bootstrap f
     domain: "acme.com",
     company_name: "Acme",
     primary_category: "SaaS",
-    target_region: "US",
+    target_region: ["United States"],
     target_language: "en",
     generate_initial_prompts: false,
   });

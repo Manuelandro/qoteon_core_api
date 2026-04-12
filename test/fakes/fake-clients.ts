@@ -18,6 +18,7 @@ import {
   ListRunBatchesFilters,
   PromptGenerationPayload,
   PromptGenerationResult,
+  PromptRunnerCompetitorSuggestion,
   PromptListFilters,
   PromptRecord,
   PromptSyncRecord,
@@ -186,12 +187,72 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
   readonly run_progress = new Map<string, RunProgress>();
   readonly executions_by_batch = new Map<string, ExecutionRecord[]>();
   readonly synced_prompts = new Map<string, string>();
+  generated_competitor_suggestions = new Map<string, PromptRunnerCompetitorSuggestion[]>();
   fail_create_run_batch: Error | null = null;
+  fail_generate_competitor_suggestions: Error | null = null;
   fail_list_run_batches: Error | null = null;
   fail_get_run_progress: Error | null = null;
   create_run_batch_delay_ms = 0;
+  last_generate_competitor_suggestions_request:
+    | {
+        project_id: string;
+        company_name: string;
+        company_website: string;
+        company_region: string[];
+        company_language: string;
+      }
+    | null = null;
   private run_batch_counter = 0;
   private execution_counter = 0;
+
+  async generate_competitor_suggestions(
+    project_id: string,
+    input: {
+      company_name: string;
+      company_website: string;
+      company_region: string[];
+      company_language: string;
+    },
+  ): Promise<PromptRunnerCompetitorSuggestion[]> {
+    this.last_generate_competitor_suggestions_request = {
+      project_id,
+      ...input,
+    };
+
+    if (this.fail_generate_competitor_suggestions) {
+      throw this.fail_generate_competitor_suggestions;
+    }
+
+    return (
+      this.generated_competitor_suggestions.get(project_id) ?? [
+        {
+          name: "Competitor One",
+          website: "https://competitor-one.example",
+          icon: "https://www.google.com/s2/favicons?domain=competitor-one.example&sz=64",
+        },
+        {
+          name: "Competitor Two",
+          website: "https://competitor-two.example",
+          icon: "https://www.google.com/s2/favicons?domain=competitor-two.example&sz=64",
+        },
+        {
+          name: "Competitor Three",
+          website: "https://competitor-three.example",
+          icon: "https://www.google.com/s2/favicons?domain=competitor-three.example&sz=64",
+        },
+        {
+          name: "Competitor Four",
+          website: "https://competitor-four.example",
+          icon: "https://www.google.com/s2/favicons?domain=competitor-four.example&sz=64",
+        },
+        {
+          name: "Competitor Five",
+          website: "https://competitor-five.example",
+          icon: "https://www.google.com/s2/favicons?domain=competitor-five.example&sz=64",
+        },
+      ]
+    );
+  }
 
   async sync_project_prompts(
     project_id: string,

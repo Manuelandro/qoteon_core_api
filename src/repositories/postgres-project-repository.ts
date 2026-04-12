@@ -11,7 +11,7 @@ interface ProjectRow {
   domain: string;
   company_name: string;
   primary_category: string;
-  target_region: string;
+  target_region: string[];
   target_language: string;
   status: Project["status"];
   created_at: Date | string;
@@ -37,7 +37,7 @@ export class PostgresProjectRepository implements ProjectRepository {
     domain: string;
     company_name: string;
     primary_category: string;
-    target_region: string;
+    target_region: string[];
     target_language: string;
     status?: Project["status"];
   }): Promise<Project> {
@@ -143,7 +143,7 @@ export class PostgresProjectRepository implements ProjectRepository {
       domain: string;
       company_name: string;
       primary_category: string;
-      target_region: string;
+      target_region: string[];
       target_language: string;
       status: Project["status"];
     }>,

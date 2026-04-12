@@ -147,7 +147,7 @@ export function create_test_context() {
         domain: "acme.com",
         company_name: "Acme",
         primary_category: "SaaS",
-        target_region: "US",
+        target_region: ["United States"],
         target_language: "en",
         status: "active",
       });

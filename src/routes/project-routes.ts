@@ -69,6 +69,24 @@ export async function register_project_routes(
     return reply.code(201).send(competitor);
   });
 
+  app.post("/projects/:project_id/competitors/prefill", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+
+    return services.orchestration_service.prefill_project_competitors(
+      request.current_user,
+      params.project_id,
+    );
+  });
+
+  app.post("/projects/:project_id/competitors/bootstrap", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+
+    return services.orchestration_service.bootstrap_project_competitors(
+      request.current_user,
+      params.project_id,
+    );
+  });
+
   app.get("/projects/:project_id/competitors", async (request) => {
     const params = parse_schema(project_params_schema, request.params);
     const competitors = await services.project_service.list_competitors(

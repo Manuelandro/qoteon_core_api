@@ -2,6 +2,7 @@ import {
   ExecutionRecord,
   ListExecutionsFilters,
   ListRunBatchesFilters,
+  PromptRunnerCompetitorSuggestion,
   PromptRecord,
   PromptSyncRecord,
   RunBatch,
@@ -13,6 +14,24 @@ import { PromptRunnerClient } from "./prompt-runner-client";
 
 export class HttpPromptRunnerClient implements PromptRunnerClient {
   constructor(private readonly client: HttpJsonClient) {}
+
+  async generate_competitor_suggestions(
+    project_id: string,
+    input: {
+      company_name: string;
+      company_website: string;
+      company_region: string[];
+      company_language: string;
+    },
+  ): Promise<PromptRunnerCompetitorSuggestion[]> {
+    const response = await this.client.request<{
+      competitors: PromptRunnerCompetitorSuggestion[];
+    }>("POST", `/internal/projects/${project_id}/competitor-suggestions`, {
+      body: input,
+    });
+
+    return response.competitors;
+  }
 
   async sync_project_prompts(
     project_id: string,

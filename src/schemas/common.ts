@@ -10,6 +10,7 @@ import {
 
 export const id_schema = z.string().min(1);
 export const json_record_schema = z.record(z.string(), z.unknown());
+export const region_array_schema = z.array(z.string().min(1)).min(1);
 
 export const organization_schema = z.object({
   id: id_schema,
@@ -44,7 +45,7 @@ export const project_schema = z.object({
   domain: z.string(),
   company_name: z.string(),
   primary_category: z.string(),
-  target_region: z.string(),
+  target_region: region_array_schema,
   target_language: z.string(),
   status: z.enum(PROJECT_STATUSES),
   created_at: z.string(),

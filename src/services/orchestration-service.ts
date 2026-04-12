@@ -5,8 +5,10 @@ import {
   LaunchRunResult,
   ListExecutionsFilters,
   ListRunBatchesFilters,
+  PrefillProjectCompetitorsResult,
   Project,
   ProjectCompetitor,
+  PromptRunnerCompetitorSuggestion,
   PromptGenerationPayload,
   PromptGenerationResult,
   PromptListFilters,
@@ -32,7 +34,7 @@ export interface SetupProjectRequest {
   domain: string;
   company_name: string;
   primary_category: string;
-  target_region: string;
+  target_region: string[];
   target_language: string;
   status?: CreateProjectInput["status"];
   competitors?: CreateCompetitorInput[];
@@ -254,6 +256,55 @@ export class OrchestrationService {
     return this.dashboard_service.get_project_overview(user, project_id);
   }
 
+  async bootstrap_project_competitors(user: AccessActor, project_id: string) {
+    await this.project_service.assert_project_access(user, project_id);
+
+    return {
+      warnings: await this.bootstrap_competitor_crawls(project_id),
+    };
+  }
+
+  async prefill_project_competitors(
+    user: AccessActor,
+    project_id: string,
+  ): Promise<PrefillProjectCompetitorsResult> {
+    const project = await this.project_service.assert_project_access(user, project_id);
+    const existingCompetitors = await this.project_service.list_competitors(user, project_id);
+
+    if (existingCompetitors.length > 0) {
+      return {
+        source: "existing",
+        competitors: existingCompetitors,
+        warnings: [],
+      };
+    }
+
+    const suggestedCompetitors = await this.prompt_runner_client.generate_competitor_suggestions(
+      project_id,
+      {
+        company_name: project.company_name,
+        company_website: build_website_url(project.domain),
+        company_region: project.target_region,
+        company_language: project.target_language,
+      },
+    );
+
+    const inputs = normalize_suggested_competitors(project.domain, suggestedCompetitors);
+
+    if (inputs.length === 0) {
+      throw new ValidationError("No usable onboarding competitors were generated");
+    }
+
+    const competitors = await this.project_service.create_competitors(user, project_id, inputs);
+    const warnings = await this.bootstrap_competitor_crawls(project_id);
+
+    return {
+      source: "generated",
+      competitors,
+      warnings,
+    };
+  }
+
   private async launch_run(
     user: AccessActor,
     project_id: string,
@@ -311,6 +362,17 @@ export class OrchestrationService {
   }
 
   private async bootstrap_source_intelligence(project_id: string): Promise<SetupProjectResult["warnings"]> {
+    return this.bootstrap_source_intelligence_targets(project_id, "all");
+  }
+
+  private async bootstrap_competitor_crawls(project_id: string): Promise<SetupProjectResult["warnings"]> {
+    return this.bootstrap_source_intelligence_targets(project_id, "competitors");
+  }
+
+  private async bootstrap_source_intelligence_targets(
+    project_id: string,
+    target_scope: "all" | "competitors",
+  ): Promise<SetupProjectResult["warnings"]> {
     const warnings: SetupProjectResult["warnings"] = [];
 
     try {
@@ -330,7 +392,7 @@ export class OrchestrationService {
 
     try {
       await this.source_intelligence_client.create_crawl_runs(project_id, {
-        target_scope: "all",
+        target_scope,
         scope_type: "full",
         trigger_type: "project_setup",
       });
@@ -347,6 +409,65 @@ export class OrchestrationService {
 
     return warnings;
   }
+}
+
+function normalize_domain(value: string): string | null {
+  const trimmed = value.trim().toLowerCase();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const candidate = /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  try {
+    const url = new URL(candidate);
+    const hostname = url.hostname.replace(/^www\./, "");
+
+    if (!hostname || !hostname.includes(".")) {
+      return null;
+    }
+
+    return hostname;
+  } catch {
+    return null;
+  }
+}
+
+function build_website_url(domain: string): string {
+  return `https://${domain}`;
+}
+
+function normalize_suggested_competitors(
+  company_domain: string,
+  suggestions: PromptRunnerCompetitorSuggestion[],
+): CreateCompetitorInput[] {
+  const normalizedCompanyDomain = normalize_domain(company_domain);
+  const seen = new Set<string>();
+
+  return suggestions
+    .map((suggestion) => {
+      const competitor_name = suggestion.name.trim();
+      const competitor_domain = normalize_domain(suggestion.website);
+
+      if (
+        !competitor_name ||
+        !competitor_domain ||
+        competitor_domain === normalizedCompanyDomain ||
+        seen.has(competitor_domain)
+      ) {
+        return null;
+      }
+
+      seen.add(competitor_domain);
+
+      return {
+        competitor_name,
+        competitor_domain,
+      };
+    })
+    .filter((competitor): competitor is CreateCompetitorInput => Boolean(competitor))
+    .slice(0, 5);
 }
 
 function build_prompt_generation_payload(

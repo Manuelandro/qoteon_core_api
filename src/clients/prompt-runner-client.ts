@@ -2,6 +2,7 @@ import {
   ExecutionRecord,
   ListExecutionsFilters,
   ListRunBatchesFilters,
+  PromptRunnerCompetitorSuggestion,
   PromptRecord,
   PromptSyncRecord,
   RunBatch,
@@ -10,6 +11,15 @@ import {
 } from "../domain/core";
 
 export interface PromptRunnerClient {
+  generate_competitor_suggestions(
+    project_id: string,
+    input: {
+      company_name: string;
+      company_website: string;
+      company_region: string[];
+      company_language: string;
+    },
+  ): Promise<PromptRunnerCompetitorSuggestion[]>;
   sync_project_prompts(
     project_id: string,
     prompts: PromptRecord[],

@@ -49,7 +49,7 @@ export interface Project {
   domain: string;
   company_name: string;
   primary_category: string;
-  target_region: string;
+  target_region: string[];
   target_language: string;
   status: ProjectStatus;
   created_at: string;
@@ -85,7 +85,7 @@ export interface CreateProjectInput {
   domain: string;
   company_name: string;
   primary_category: string;
-  target_region: string;
+  target_region: string[];
   target_language: string;
   status?: ProjectStatus;
 }
@@ -95,7 +95,7 @@ export interface UpdateProjectInput {
   domain?: string;
   company_name?: string;
   primary_category?: string;
-  target_region?: string;
+  target_region?: string[];
   target_language?: string;
   status?: ProjectStatus;
 }
@@ -283,7 +283,7 @@ export interface DashboardProjectDescriptor {
   domain: string;
   category: string;
   language: string;
-  region: string;
+  region: string[];
   status: ProjectStatus;
 }
 
@@ -399,7 +399,7 @@ export interface PromptGenerationPayload {
   industries?: string[];
   comparison_topics?: string[];
   faq_questions?: string[];
-  region?: string;
+  region?: string[];
   language?: string;
   metadata_json?: Record<string, unknown>;
 }
@@ -503,6 +503,12 @@ export interface ServiceWarning {
   details?: Record<string, unknown>;
 }
 
+export interface PromptRunnerCompetitorSuggestion {
+  name: string;
+  website: string;
+  icon: string;
+}
+
 export interface SourceIntelligenceCrawlTarget {
   id: string;
   project_id: string;
@@ -593,6 +599,12 @@ export interface SetupProjectResult {
     succeeded: boolean;
     result: PromptGenerationResult | null;
   };
+  warnings: ServiceWarning[];
+}
+
+export interface PrefillProjectCompetitorsResult {
+  source: "existing" | "generated";
+  competitors: ProjectCompetitor[];
   warnings: ServiceWarning[];
 }
 

@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-import { competitor_schema, json_record_schema, project_schema, run_type_schema, service_warning_schema } from "./common";
+import {
+  competitor_schema,
+  json_record_schema,
+  project_schema,
+  region_array_schema,
+  run_type_schema,
+  service_warning_schema,
+} from "./common";
 
 export const prompt_generation_request_schema = z.object({
   category: z.string().min(1).optional(),
@@ -12,7 +19,7 @@ export const prompt_generation_request_schema = z.object({
   industries: z.array(z.string().min(1)).optional(),
   comparison_topics: z.array(z.string().min(1)).optional(),
   faq_questions: z.array(z.string().min(1)).optional(),
-  region: z.string().min(1).optional(),
+  region: region_array_schema.optional(),
   language: z.string().min(1).optional(),
   metadata_json: json_record_schema.optional(),
 });

@@ -39,7 +39,7 @@ test("project creation route creates project, competitors, and defers prompt gen
       domain: "acme.com",
       company_name: "Acme",
       primary_category: "SaaS",
-      target_region: "US",
+      target_region: ["United States"],
       target_language: "en",
       status: "active",
       competitors: [
@@ -107,7 +107,7 @@ test("project creation route returns 429 when edge rate limit is exceeded", asyn
       domain: "acme.com",
       company_name: "Acme",
       primary_category: "SaaS",
-      target_region: "US",
+      target_region: ["United States"],
       target_language: "en",
     },
   });
@@ -125,7 +125,7 @@ test("project creation route returns 429 when edge rate limit is exceeded", asyn
       domain: "acme-two.com",
       company_name: "Acme Two",
       primary_category: "SaaS",
-      target_region: "US",
+      target_region: ["United States"],
       target_language: "en",
     },
   });
@@ -205,6 +205,65 @@ test("competitor CRUD routes work end to end", async (t) => {
   });
 
   assert.equal(final_list_response.json().competitors.length, 0);
+});
+
+test("competitor prefill route generates and persists onboarding competitors", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id, {
+    domain: "acme.com",
+    company_name: "Acme",
+    target_region: ["Europe"],
+    target_language: "English",
+  });
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/projects/${project.id}/competitors/prefill`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().source, "generated");
+  assert.equal(response.json().competitors.length, 5);
+
+  const listResponse = await app.inject({
+    method: "GET",
+    url: `/projects/${project.id}/competitors`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+  });
+
+  assert.equal(listResponse.statusCode, 200);
+  assert.equal(listResponse.json().competitors.length, 5);
+});
+
+test("competitor bootstrap route enqueues competitor crawl refreshes", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/projects/${project.id}/competitors/bootstrap`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().warnings.length, 0);
 });
 
 test("project access is denied when the user does not belong to the organization", async (t) => {
