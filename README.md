@@ -1,839 +1,243 @@
 # Qoteon Core API
 
-Production-minded Core API / orchestration service for Qoteon.
+`qoteon_core_api` is the authenticated control plane for Qoteon.
 
-## What it does
-
-- Serves as the only backend the frontend should call
-- Owns organizations, organization membership, projects, and competitors
-- Orchestrates Source Intelligence, Prompt Library, and Prompt Runner through client interfaces
-- Proxies Dashboard Layer portfolio, overview, KPI, trend, and run-result reads
-- Keeps workflow logic in services instead of route handlers
+The frontend should talk to this service, not directly to the internal backend services.
 
 ## Current implementation status
 
-- Implemented:
-  - project and competitor CRUD
-  - plan catalog and resolved entitlement snapshots for `trial`, `starter`, `growth`, and `enterprise`
-  - default self-serve organization creation on `trial`
-  - Core-owned usage counters for tracked prompts, LLM responses, article drafts, page improvements, and crawled pages
-  - compute-access enforcement for expired trials or inactive paid periods
-  - project/domain, competitor, tracked-model, prompt-set, and response-quota checks before crawl and run orchestration
-  - onboarding competitor prefill orchestration that asks Prompt Runner for 5 structured competitors, persists them in Core-owned records, and re-enqueues competitor crawls in Source Intelligence
-  - two-role authorization model with `owner` tenant scope and `admin` global org/project scope
-  - automatic post-crawl prompt generation owned by Prompt Library after Source Intelligence readiness notification, with manual regeneration still available through Core
-  - crawl-target bootstrap and crawl-run orchestration through Source Intelligence
-  - run launch orchestration through Prompt Runner
-  - array-backed `target_region` project metadata flow across Core, Source Intelligence, Dashboard, and Prompt Library contracts
-  - edge-facing admission controls with route-aware rate limiting and backpressure `429` responses for hot POST routes
-  - per-user and per-project concurrency guards for run launch and crawl trigger workflows
-  - workflow idempotency for run launch and crawl trigger routes, with replay support
-  - dashboard portfolio, overview, KPI, trend, and run-result proxy routes through Dashboard Layer
-  - project-level source-intelligence status, persisted client crawl pass flags, prompt-context readiness, and prompt-context read routes
-  - partial-success handling when downstream orchestration fails after project creation
-  - standardized shared database TLS env support through `DATABASE_SSL_MODE` plus optional `DATABASE_SSL_CA_FILE`, `DATABASE_SSL_CERT_FILE`, and `DATABASE_SSL_KEY_FILE`
-- Deferred:
-  - proxying parser summary reads through Core
+Implemented:
 
-## Stack
+- Supabase-backed user authentication
+- Core-owned users, organizations, memberships, projects, and competitors
+- plan catalog, trial state, retention settings, and usage counters
+- project and competitor CRUD
+- draft-to-active onboarding flow
+- competitor prefills through Prompt Runner during onboarding
+- crawl orchestration through Source Intelligence
+- prompt generation and prompt-state orchestration through Prompt Library
+- baseline and `daily_tracking` launch orchestration through Prompt Runner
+- dashboard proxy routes through Dashboard Layer
+- admin proxy routes for Daily Runner and Reconciler
+- Core-shaped admin launch list routes for baseline-oriented and established projects
+- per-user and per-project concurrency guards on hot workflow routes
+- idempotency support for run launch and crawl trigger flows
+- route-aware admission control and backpressure for public write routes
 
-- Node.js
-- TypeScript
-- Fastify
-- PostgreSQL via `pg` for all application data access
-- Supabase Auth for bearer-token verification
-- Zod
-- Native `node:test`
+Deferred:
 
-## Auth model
+- parser-summary reads proxied through Core
 
-- Core always verifies `Authorization: Bearer <supabase_access_token>` with Supabase Auth
-- On successful auth, Core upserts the authenticated user into `public.core_users`
-- There is no local stub mode anymore; local and production now use the same auth path
+## What Core owns
 
-## Role model
+- end-user authentication boundary
+- organizations and organization membership
+- projects and competitors
+- plan entitlements and usage counters
+- public orchestration entry points
+- admin access model
+
+Core does not own:
+
+- crawl tables
+- prompt templates
+- prompt execution rows
+- parse artifacts
+- dashboard materializations
+
+## Auth and roles
+
+### End-user auth
+
+- Core verifies `Authorization: Bearer <supabase_access_token>`
+- successful auth upserts the user into `public.core_users`
+
+### Internal auth
+
+- `/internal/*` routes require `Authorization: Bearer <INTERNAL_AUTH_TOKEN>`
+
+### Runtime roles
 
 - `owner`
-  - default end-user role
-  - can create organizations and operate on projects inside organizations they belong to
+  tenant-scoped through organization membership
 - `admin`
-  - platform-wide operator role
-  - can list every organization and access every project-backed workflow in the database without org membership
+  global project and organization access
 
-The legacy `member` role is no longer part of the runtime contract. Existing `member` rows are migrated to `owner`.
+## Main workflows
 
-## Downstream service assumptions
+### Onboarding
 
-The Core API currently ships with HTTP adapters for:
+1. create or reuse a draft organization and project
+2. ask Prompt Runner for competitor suggestions
+3. persist the selected competitors in Core
+4. activate the project only after onboarding confirmation
+5. bootstrap crawl work only after the project becomes `active`
 
-- Source Intelligence
-- Prompt Library
-- Prompt Runner
-- Dashboard Layer
+### Prompt and run orchestration
 
-Prompt Runner now supports both `PROVIDER_EXECUTION_MODE=stub` and
-`PROVIDER_EXECUTION_MODE=live`. Core does not manage provider credentials
-itself; the live provider keys must be configured on the Prompt Runner API and
-worker services.
+1. request prompt generation from Prompt Library
+2. request prompt-set selection from Prompt Library
+3. sync prompts into Prompt Runner
+4. enforce quotas and concurrency guards
+5. create the run batch in Prompt Runner
+6. proxy progress and result reads back to the frontend
 
-Default Render internal service base URLs:
+### Automation and recovery
 
-- Source Intelligence: `http://qoteon-source-intelligence-api:3000`
-- Prompt Library: `http://qoteon-prompt-library:3000`
-- Prompt Runner: `http://qoteon-prompt-runner-api:3000`
-- Dashboard Layer: `http://qoteon-dashboard-layer:4020`
+Core also exposes private routes used by:
 
-Those are the defaults used by the app when `SOURCE_INTELLIGENCE_BASE_URL`, `PROMPT_LIBRARY_BASE_URL`, `PROMPT_RUNNER_BASE_URL`, and `DASHBOARD_LAYER_BASE_URL` are not explicitly set.
+- `qoteon_daily_runner`
+- `qoteon_reconciler`
 
-This codebase assumes all four downstreams expose HTTP APIs on Render private-network hosts.
+This keeps quota enforcement and run-launch semantics centralized in Core.
 
-Default internal paths assumed by the adapters:
+The admin launch pages are also shaped here:
 
-- Source Intelligence
-  - `POST /internal/projects/:project_id/crawl-targets/bootstrap`
-  - `POST /internal/projects/:project_id/crawl-runs`
-  - `GET /internal/projects/:project_id/crawl-runs`
-  - `GET /internal/projects/:project_id/prompt-context`
-- Prompt Library
-  - `POST /internal/projects/:project_id/prompts/generate`
-  - `GET /internal/projects/:project_id/prompts`
-  - `GET /internal/projects/:project_id/prompt-sets/:run_type`
-  - `POST /internal/projects/:project_id/prompts/:prompt_id/activate`
-  - `POST /internal/projects/:project_id/prompts/:prompt_id/deactivate`
-- Prompt Runner
-  - `POST /internal/projects/:project_id/competitor-suggestions`
-  - `POST /internal/projects/:project_id/run-batches`
-  - `GET /internal/projects/:project_id/run-batches`
-  - `GET /internal/run-batches/:run_batch_id`
-  - `GET /internal/run-batches/:run_batch_id/progress`
-  - `GET /internal/run-batches/:run_batch_id/executions`
-  - `POST /internal/executions/:execution_id/retry`
-- Dashboard Layer
-  - `GET /portfolio/projects`
-  - `GET /projects/:project_id/overview`
-  - `GET /projects/:project_id/visibility/summary`
-  - `GET /projects/:project_id/visibility/models`
-  - `GET /projects/:project_id/visibility/clusters`
-  - `GET /projects/:project_id/visibility/competitors`
-  - `GET /projects/:project_id/visibility/trends`
-  - `GET /runs/:run_batch_id/results`
+- baseline launch rows are sourced from Reconciler-backed project health and detailed reconciliation reads
+- daily launch rows are filtered using Reconciler baseline readiness and enriched with Daily Runner latest-workflow diagnostics
+- the admin frontend still never talks to downstream services directly
 
-If your Render services expose different paths behind those internal hosts, update the HTTP clients without changing the route or orchestration layers.
+## Route groups
 
-## Render deployment notes
-
-- Deploy the Core API, Source Intelligence, Prompt Library, Prompt Runner API, and Dashboard Layer into the same Render private network.
-- Put Core behind an external WAF/CDN or reverse proxy with DDoS protection (for example Cloudflare, Fastly, or Render edge protections). App-level guards are additive, not a replacement for perimeter protection.
-- The Core API expects to reach Source Intelligence at `qoteon-source-intelligence-api:3000`.
-- The Core API expects to reach Prompt Library at `qoteon-prompt-library:3000`.
-- The Core API expects to reach Prompt Runner API at `qoteon-prompt-runner-api:3000`.
-- The Core API expects to reach Dashboard Layer at `qoteon-dashboard-layer:4020`.
-- Set `DASHBOARD_LAYER_AUTH_TOKEN` in Core and `INTERNAL_AUTH_TOKEN` in Dashboard Layer to the same private value.
-- Core forwards `x-qoteon-user-id` and `x-qoteon-user-role` to Dashboard Layer so the dashboard service can re-check tenant access with the same owner/admin scope.
-- Override `SOURCE_INTELLIGENCE_BASE_URL`, `PROMPT_LIBRARY_BASE_URL`, `PROMPT_RUNNER_BASE_URL`, or `DASHBOARD_LAYER_BASE_URL` only if you intentionally change those internal service names or ports.
-
-## API routes
-
-All routes except `GET /health` require authentication.
-
-Database access for all local Core API tables is done through PostgreSQL using `DATABASE_URL`.
-
-- Pass `Authorization: Bearer <supabase_access_token>`
+All routes except `GET /health` require auth.
 
 ### Health
 
-#### `GET /health`
-
-- Payload: none
-- What it does: returns a simple liveness payload for the Core API process.
+- `GET /health`
 
 ### Organizations
 
-#### `GET /organizations`
-
-- Payload: none
-- What it does: lists organizations visible to the current user. `owner` sees only org memberships. `admin` sees every organization.
-
-#### `POST /organizations`
-
-- Payload:
-
-```json
-{
-  "name": "Acme",
-  "slug": "acme",
-  "plan_type": "trial"
-}
-```
-
-- Notes:
-  - `slug` is optional.
-  - `plan_type` is optional and defaults to `trial`.
-- What it does: creates an organization and adds the current user as an `owner`.
+- `GET /organizations`
+- `POST /organizations`
 
 ### Projects
 
-#### `POST /projects`
-
-- Payload:
-
-```json
-{
-  "organization_id": "org_123",
-  "name": "Acme Project",
-  "domain": "acme.com",
-  "company_name": "Acme",
-  "primary_category": "SaaS",
-  "target_region": ["Worldwide"],
-  "target_language": "en",
-  "status": "active",
-  "competitors": [
-    {
-      "competitor_name": "Other Brand",
-      "competitor_domain": "otherbrand.com",
-      "notes": "Optional note"
-    }
-  ],
-  "generate_initial_prompts": false
-}
-```
-
-- Notes:
-  - `status` is optional.
-  - `competitors` is optional.
-  - `generate_initial_prompts` defaults to `false`.
-  - `generate_initial_prompts` is accepted for backward compatibility, but project creation no longer generates prompts inline and the flag is ignored.
-- What it does:
-  - Validates organization access.
-  - Creates the project.
-  - Creates competitors if provided.
-  - Bootstraps Source Intelligence crawl targets and enqueues initial crawl runs asynchronously.
-  - Returns immediately while Source Intelligence crawls the client and competitor sites.
-  - Relies on Prompt Library to generate the initial prompt set automatically once Source Intelligence has produced ready crawl context.
-  - Leaves `POST /projects/:project_id/prompts/generate` available as an explicit regeneration route after readiness.
-  - Returns `success` or `partial_success` if any downstream orchestration fails after project creation.
-
-#### `GET /projects`
-
-- Query params:
-
-```json
-{
-  "organization_id": "org_123",
-  "status": "active"
-}
-```
-
-- Notes:
-  - Both query params are optional.
-- What it does: lists projects visible to the current user, optionally filtered by organization and project status. `admin` can query across every organization.
-
-#### `GET /projects/:project_id`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload: none
-- What it does: returns one project after validating project access.
-
-#### `PATCH /projects/:project_id`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload:
-
-```json
-{
-  "name": "Updated Project Name",
-  "domain": "new-domain.com",
-  "company_name": "Acme Inc",
-  "primary_category": "AI Software",
-  "target_region": ["Europe", "North America"],
-  "target_language": "en",
-  "status": "paused"
-}
-```
-
-- Notes:
-  - Provide at least one field.
-  - Every field is optional.
-- What it does: updates project metadata after validating project access.
+- `POST /projects`
+- `GET /projects`
+- `GET /projects/:project_id`
+- `PATCH /projects/:project_id`
 
 ### Competitors
 
-#### `POST /projects/:project_id/competitors`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload:
-
-```json
-{
-  "competitor_name": "Competitor",
-  "competitor_domain": "competitor.com",
-  "notes": "Optional note"
-}
-```
-
-- What it does: creates a competitor row for the project.
-
-#### `POST /projects/:project_id/competitors/prefill`
-
-- Payload: none
-- What it does:
-  - loads the Core project metadata
-  - returns existing competitors immediately if the project already has them
-  - otherwise asks Prompt Runner for 5 structured onboarding competitors
-  - persists the returned competitors in `public.core_project_competitors`
-  - re-bootstraps Source Intelligence competitor targets and enqueues competitor crawls
-
-#### `POST /projects/:project_id/competitors/bootstrap`
-
-- Payload: none
-- What it does:
-  - re-bootstraps Source Intelligence competitor targets for the project
-  - enqueues competitor crawl runs so competitors added after project creation enter the crawl pipeline
-
-#### `GET /projects/:project_id/competitors`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload: none
-- What it does: lists competitors for the project.
-
-#### `PATCH /projects/:project_id/competitors/:competitor_id`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123",
-  "competitor_id": "competitor_123"
-}
-```
-
-- Payload:
-
-```json
-{
-  "competitor_name": "Updated Competitor",
-  "competitor_domain": "updated-competitor.com",
-  "notes": "Updated note"
-}
-```
-
-- Notes:
-  - Provide at least one field.
-  - Every field is optional.
-- What it does: updates one competitor for the project.
-
-#### `DELETE /projects/:project_id/competitors/:competitor_id`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123",
-  "competitor_id": "competitor_123"
-}
-```
-
-- Payload: none
-- What it does: deletes one competitor from the project.
-
-### Prompt workflows
-
-#### `POST /projects/:project_id/prompts/generate`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload:
-
-```json
-{
-  "personas": ["brand marketers", "SEO leads"],
-  "use_cases": ["monitoring brand mentions in AI answers"],
-  "metadata_json": {
-    "source": "manual_regeneration"
-  }
-}
-```
-
-- What it does: validates project access, checks that Source Intelligence is ready for prompt generation, and then asks Prompt Library to regenerate prompts for the project.
-- Notes:
-  - Initial prompt generation is normally automatic once Source Intelligence becomes ready.
-  - This route exists for explicit regeneration after a later crawl or data refresh.
-- If Source Intelligence is not ready yet, this route returns `409 conflict`.
-
-#### `GET /projects/:project_id/prompts`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Query params:
-
-```json
-{
-  "status": "ready",
-  "is_active": "true"
-}
-```
-
-- Notes:
-  - Both query params are optional.
-  - `is_active` must be `"true"` or `"false"` when present.
-- What it does: returns project prompts from Prompt Library, optionally filtered by status and active flag.
-
-#### `GET /projects/:project_id/prompt-sets/:run_type`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123",
-  "run_type": "baseline"
-}
-```
-
-- Notes:
-  - `run_type` must be `baseline` or `daily_tracking`.
-  - `monthly_tracking` is still accepted as a legacy alias and normalizes to `daily_tracking`.
-- What it does: returns a lightweight prompt set summary for the requested run type.
-
-#### `POST /projects/:project_id/prompts/:prompt_id/activate`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123",
-  "prompt_id": "prompt_123"
-}
-```
-
-- Payload: none
-- What it does: marks one prompt as active in Prompt Library.
-
-#### `POST /projects/:project_id/prompts/:prompt_id/deactivate`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123",
-  "prompt_id": "prompt_123"
-}
-```
-
-- Payload: none
-- What it does: marks one prompt as inactive in Prompt Library.
-
-### Source intelligence workflows
-
-#### `POST /projects/:project_id/source-intelligence/crawl-runs`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload:
-
-```json
-{
-  "target_scope": "all",
-  "scope_type": "full",
-  "max_pages": 50,
-  "max_depth": 3
-}
-```
-
-- Notes:
-  - `target_scope` may be `client`, `competitors`, or `all`.
-  - `scope_type` may be `full`, `incremental`, or `single_url`.
-  - `competitor_ids` and `single_url` are optional advanced filters.
-  - `Idempotency-Key` is supported and strongly recommended. Repeating the same key with the same payload returns the stored response and sets `x-idempotent-replay: true`.
-- What it does: validates project access and asks Source Intelligence to enqueue crawl runs for the project. Use this route when prompt context reports `client_website_crawl_status=not_passed` and you want to retry the client crawl later.
-
-#### `GET /projects/:project_id/source-intelligence/crawl-runs`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Query params:
-
-```json
-{
-  "status": "completed",
-  "limit": 10
-}
-```
-
-- Notes:
-  - Both query params are optional.
-- What it does: returns crawl runs for the project through the Source Intelligence client.
-
-#### `GET /projects/:project_id/source-intelligence/prompt-context`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload: none
-- What it does: returns the latest crawl-derived prompt-context payload for the project, including `is_ready_for_prompt_generation`, `prompt_generation_blockers`, `client_website_crawl_status`, `client_website_crawl_message`, `client_website_crawl_attempts_made`, and `client_website_crawl_max_attempts`.
-
-### Run workflows
-
-#### `POST /projects/:project_id/runs/baseline`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload:
-
-```json
-{
-  "ai_model_ids": ["gpt-5.4", "claude-sonnet"],
-  "metadata_json": {
-    "source": "manual_launch"
-  }
-}
-```
-
-- Notes:
-  - `ai_model_ids` is required and must contain at least one model id.
-  - `metadata_json` is optional.
-  - `Idempotency-Key` is supported and strongly recommended. Repeating the same key with the same payload returns the stored response and sets `x-idempotent-replay: true`.
-- What it does:
-  - Validates project access.
-  - Fetches the `baseline` prompt set from Prompt Library.
-  - Creates a run batch in Prompt Runner.
-  - Returns prompt set info plus the created run batch.
-
-#### `POST /projects/:project_id/runs/daily-tracking`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload:
-
-```json
-{
-  "ai_model_ids": ["gpt-5.4"],
-  "metadata_json": {
-    "source": "daily_cycle"
-  }
-}
-```
-
-- Notes:
-  - `ai_model_ids` is required and must contain at least one model id.
-  - `metadata_json` is optional.
-  - `Idempotency-Key` is supported and strongly recommended. Repeating the same key with the same payload returns the stored response and sets `x-idempotent-replay: true`.
-- What it does:
-  - Validates project access.
-  - Fetches the `daily_tracking` prompt set from Prompt Library.
-  - Creates a run batch in Prompt Runner.
-  - Returns prompt set info plus the created run batch.
-
-#### `POST /projects/:project_id/runs/monthly-tracking`
-
-- Compatibility alias for `POST /projects/:project_id/runs/daily-tracking`.
-- Uses the same idempotent workflow and normalizes to the canonical `daily_tracking` run type.
-
-#### `GET /projects/:project_id/run-batches`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Query params:
-
-```json
-{
-  "status": "queued",
-  "run_type": "baseline",
-  "start_date": "2026-04-01",
-  "end_date": "2026-04-30",
-  "limit": 10
-}
-```
-
-- Notes:
-  - All query params are optional.
-  - `run_type` must be `baseline` or `daily_tracking` when present.
-  - `monthly_tracking` is still accepted as a legacy alias and normalizes to `daily_tracking`.
-- What it does: lists run batches for the project, filtered by status, run type, and date range when supplied.
-
-#### `GET /run-batches/:run_batch_id`
-
-- Path params:
-
-```json
-{
-  "run_batch_id": "run_batch_123"
-}
-```
-
-- Payload: none
-- What it does: loads one run batch from Prompt Runner and validates the current user can access the owning project.
-
-#### `GET /run-batches/:run_batch_id/progress`
-
-- Path params:
-
-```json
-{
-  "run_batch_id": "run_batch_123"
-}
-```
-
-- Payload: none
-- What it does: returns progress counters for the run batch after validating access.
-
-#### `GET /run-batches/:run_batch_id/executions`
-
-- Path params:
-
-```json
-{
-  "run_batch_id": "run_batch_123"
-}
-```
-
-- Query params:
-
-```json
-{
-  "status": "failed"
-}
-```
-
-- Notes:
-  - `status` is optional.
-- What it does: lists executions for a run batch, optionally filtered by execution status.
-
-#### `POST /run-batches/:run_batch_id/executions/:execution_id/retry`
-
-- Path params:
-
-```json
-{
-  "run_batch_id": "run_batch_123",
-  "execution_id": "execution_123"
-}
-```
-
-- Payload: none
-- What it does: retries one execution in Prompt Runner after validating access to the parent run batch.
-
-### Overview and dashboard
-
-#### `GET /projects/:project_id/overview`
-
-- Path params:
-
-```json
-{
-  "project_id": "project_123"
-}
-```
-
-- Payload: none
-- What it does:
-  - Validates project access in Core.
-  - Forwards the request to Dashboard Layer with the authenticated user ID.
-  - Returns the dashboard overview payload after Dashboard Layer re-checks tenant access and lazily materializes KPIs when needed.
-
-#### `GET /dashboard/projects`
-
-- Query params:
-
-```json
-{
-  "organization_id": "org_123",
-  "status": "active",
-  "limit": 20
-}
-```
-
-- Notes:
-  - All query params are optional.
-- What it does:
-  - Validates optional organization scope in Core.
-  - Proxies the request to Dashboard Layer's portfolio endpoint.
-  - Returns KPI-focused portfolio cards for every visible project.
-
-#### `GET /projects/:project_id/visibility/summary`
-
-- Query params:
-
-```json
-{
-  "run_batch_id": "run_batch_123",
-  "run_type": "baseline",
-  "start_date": "2026-04-01T00:00:00.000Z",
-  "end_date": "2026-04-30T23:59:59.999Z"
-}
-```
-
-- Notes:
-  - All query params are optional.
-  - Core also accepts Dashboard Layer's camelCase query aliases such as `runBatchId` and `startDate`.
-- What it does: validates project access and proxies the canonical KPI summary request to Dashboard Layer.
-
-#### `GET /projects/:project_id/visibility/models`
-
-- What it does: validates project access and proxies the model-level dashboard breakdown request to Dashboard Layer.
-
-#### `GET /projects/:project_id/visibility/clusters`
-
-- What it does: validates project access and proxies the cluster-level dashboard breakdown request to Dashboard Layer.
-
-#### `GET /projects/:project_id/visibility/competitors`
-
-- What it does: validates project access and proxies the competitor-pressure breakdown request to Dashboard Layer.
-
-#### `GET /projects/:project_id/visibility/trends`
-
-- What it does: validates project access and proxies chart-ready trend data from Dashboard Layer.
-
-#### `GET /run-batches/:run_batch_id/results`
-
-- Payload: none
-- What it does:
-  - Loads the run batch from Prompt Runner so Core can validate access to the owning project.
-  - Proxies the run-results dashboard request to Dashboard Layer.
-  - Returns the run KPI summary plus model, cluster, and competitor breakdowns.
-
-## Data model
-
-Supabase SQL migrations live under [supabase/migrations](/Users/manuelpalma/Work/Personals/qoteon/qoteon_core_api/supabase/migrations).
-
-Tables created:
-
-- `public.core_users`
-- `public.core_organizations`
-- `public.core_organization_users`
-- `public.core_projects`
-- `public.core_project_competitors`
-- `public.core_workflow_idempotency`
-
-## Commands
+- `POST /projects/:project_id/competitors`
+- `POST /projects/:project_id/competitors/prefill`
+- `POST /projects/:project_id/competitors/bootstrap`
+- `GET /projects/:project_id/competitors`
+- `PATCH /projects/:project_id/competitors/:competitor_id`
+- `DELETE /projects/:project_id/competitors/:competitor_id`
+
+### Prompt and workflow routes
+
+- `POST /projects/:project_id/prompts/generate`
+- `GET /projects/:project_id/prompts`
+- `GET /projects/:project_id/prompt-sets/:run_type`
+- `POST /projects/:project_id/prompts/:prompt_id/activate`
+- `POST /projects/:project_id/prompts/:prompt_id/deactivate`
+
+### Run and crawl routes
+
+- `POST /projects/:project_id/runs/baseline`
+- `POST /projects/:project_id/runs/daily-tracking`
+- `POST /projects/:project_id/runs/monthly-tracking`
+- `POST /projects/:project_id/source-intelligence/crawl-runs`
+- `GET /projects/:project_id/source-intelligence/crawl-runs`
+- `GET /projects/:project_id/source-intelligence/prompt-context`
+- `GET /projects/:project_id/run-batches`
+- `GET /run-batches/:run_batch_id`
+- `GET /run-batches/:run_batch_id/progress`
+- `GET /run-batches/:run_batch_id/executions`
+- `POST /run-batches/:run_batch_id/executions/:execution_id/retry`
+
+### Dashboard proxy routes
+
+- `GET /dashboard/projects`
+- `GET /projects/:project_id/overview`
+- `GET /projects/:project_id/visibility/summary`
+- `GET /projects/:project_id/visibility/models`
+- `GET /projects/:project_id/visibility/clusters`
+- `GET /projects/:project_id/visibility/competitors`
+- `GET /projects/:project_id/visibility/trends`
+- `GET /run-batches/:run_batch_id/results`
+
+### Admin routes
+
+Reconciler proxy:
+
+- `GET /admin/runs/baseline`
+- `GET /admin/projects/reconciliation`
+- `GET /admin/projects/:project_id/reconciliation`
+- `POST /admin/projects/:project_id/reconciliation/run-now`
+- `POST /admin/projects/:project_id/recovery/retry-crawl`
+- `POST /admin/projects/:project_id/recovery/regenerate-prompts`
+- `POST /admin/projects/:project_id/recovery/launch-baseline`
+- `POST /admin/projects/:project_id/recovery/restart-initial-pipeline`
+
+Daily Runner proxy:
+
+- `GET /admin/runs/daily`
+- `POST /admin/projects/:project_id/recovery/launch-daily`
+- `GET /admin/daily-runner/projects`
+- `GET /admin/daily-runner/projects/:project_id`
+- `GET /admin/daily-runner/projects/:project_id/workflow-runs`
+- `GET /admin/daily-runner/projects/:project_id/workflows/latest`
+- `GET /admin/daily-runner/workflows/:workflow_run_id`
+- `GET /admin/daily-runner/workflows/:workflow_run_id/events`
+- `POST /admin/daily-runner/projects/:project_id/run-now`
+- `POST /admin/daily-runner/projects/:project_id/pause`
+- `POST /admin/daily-runner/projects/:project_id/resume`
+- `POST /admin/daily-runner/projects/:project_id/update-schedule`
+- `POST /admin/daily-runner/projects/:project_id/restart-workflow`
+- `POST /admin/daily-runner/workflows/:workflow_run_id/retry-step`
+- `POST /admin/daily-runner/workflows/:workflow_run_id/restart`
+
+### Internal automation routes
+
+- `POST /internal/projects/:project_id/runs/initial-baseline`
+- `POST /internal/projects/:project_id/runs/baseline`
+- `POST /internal/projects/:project_id/runs/daily-tracking`
+- `POST /internal/projects/:project_id/daily-runner/crawl-refresh`
+- `GET /internal/projects/:project_id/daily-runner/prompt-context`
+- `POST /internal/projects/:project_id/daily-runner/prompts/regenerate`
+- `POST /internal/projects/:project_id/daily-runner/runs/daily-tracking`
+- `GET /internal/daily-runner/run-batches/:run_batch_id/progress`
+
+## Downstream dependencies
+
+Core currently talks to:
+
+- Source Intelligence
+- Prompt Library
+- Prompt Runner
+- Dashboard Layer
+- Daily Runner
+- Reconciler
+
+All of those integrations are implemented as client adapters under `src/clients`.
+
+## Local run
 
 ```bash
 npm install
 npm run db:migrate
 npm run build
-npm test
+npm run start
 ```
 
-`npm run db:migrate` uses `psql` against `DATABASE_URL` and applies every `.sql` file in `supabase/migrations` in filename order.
+## Scripts
 
-Required database env vars:
+- `npm run build`
+- `npm run db:migrate`
+- `npm run start`
+- `npm run test`
 
-```bash
-DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.<project-ref>.supabase.co:5432/postgres
-DATABASE_SSL_MODE=no-verify
-DATABASE_SSL_CA_FILE=
-DATABASE_SSL_CERT_FILE=
-DATABASE_SSL_KEY_FILE=
-```
+## Environment notes
 
-The service still accepts the older `DATABASE_CA_CERT_PATH` variable as a backward-compatible alias for `DATABASE_SSL_CA_FILE`.
+Important variables:
 
-Downstream service env vars:
+- `DATABASE_URL`
+- `INTERNAL_AUTH_TOKEN`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY` or the configured auth verification values
+- downstream base URLs and auth tokens for Source Intelligence, Prompt Library, Prompt Runner, Dashboard Layer, Daily Runner, and Reconciler
 
-```bash
-SOURCE_INTELLIGENCE_BASE_URL=http://qoteon-source-intelligence-api:3000
-SOURCE_INTELLIGENCE_AUTH_TOKEN=
-PROMPT_LIBRARY_BASE_URL=http://qoteon-prompt-library:3000
-PROMPT_LIBRARY_AUTH_TOKEN=
-PROMPT_RUNNER_BASE_URL=http://qoteon-prompt-runner-api:3000
-PROMPT_RUNNER_AUTH_TOKEN=
-```
-
-Core protection env vars:
-
-```bash
-CORE_TRUST_PROXY=true
-CORE_RATE_LIMIT_WINDOW_MS=60000
-CORE_RATE_LIMIT_DEFAULT_MAX=240
-CORE_RATE_LIMIT_PROJECT_CREATE_MAX=20
-CORE_RATE_LIMIT_RUN_LAUNCH_MAX=30
-CORE_RATE_LIMIT_CRAWL_TRIGGER_MAX=30
-CORE_BACKPRESSURE_MAX_IN_FLIGHT=120
-CORE_BACKPRESSURE_MAX_IN_FLIGHT_CRITICAL=24
-CORE_IDEMPOTENCY_EXPLICIT_TTL_SECONDS=86400
-CORE_IDEMPOTENCY_IMPLICIT_TTL_SECONDS=45
-CORE_IDEMPOTENCY_REQUIRE_HEADER=false
-```
-
-Auth env vars are always required:
-
-```bash
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your-supabase-anon-key
-```
-
-The checked-in [`.env.example`](/Users/manuelpalma/Work/Personals/qoteon/qoteon_core_api/.env.example) now defaults to the documented local values and includes a `local` and `production` comment above every variable so the expected deployment value is visible in one place.
+See [`.env.example`](./.env.example) for the current local and production defaults.

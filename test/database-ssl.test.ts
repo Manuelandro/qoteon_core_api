@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-import { read_env } from "../src/config/env";
+import { load_env_file_if_present, read_env } from "../src/config/env";
 import { build_ssl_config, sanitize_connection_string } from "../src/db/postgres";
 
 test("read_env maps the legacy CA path to the standardized CA file field", () => {
   const env = read_env({
     DATABASE_URL: "postgres://user:pass@db.example.com:6543/postgres",
+    INTERNAL_AUTH_TOKEN: "qoteon-local-core-token",
     SUPABASE_URL: "https://example.supabase.co",
     SUPABASE_ANON_KEY: "test-anon-key",
     DATABASE_CA_CERT_PATH: "/tmp/core-ca.pem",
@@ -42,4 +46,30 @@ test("build_ssl_config maps verify-full to rejectUnauthorized=true", () => {
 
   assert.ok(ssl_config && typeof ssl_config !== "boolean");
   assert.equal(ssl_config.rejectUnauthorized, true);
+});
+
+test("load_env_file_if_present loads dotenv-style values into process.env", () => {
+  const temp_directory = mkdtempSync(join(tmpdir(), "qoteon-core-env-"));
+  const env_file_path = join(temp_directory, ".env");
+  const env_key = "QOTEON_CORE_TEST_ENV_LOADED";
+  const previous_value = process.env[env_key];
+
+  writeFileSync(env_file_path, `${env_key}=loaded-from-file\n`, "utf8");
+  delete process.env[env_key];
+
+  try {
+    load_env_file_if_present(env_file_path);
+    assert.equal(process.env[env_key], "loaded-from-file");
+  } finally {
+    if (previous_value === undefined) {
+      delete process.env[env_key];
+    } else {
+      process.env[env_key] = previous_value;
+    }
+
+    rmSync(temp_directory, {
+      force: true,
+      recursive: true,
+    });
+  }
 });

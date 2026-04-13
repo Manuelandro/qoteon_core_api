@@ -1,4 +1,6 @@
 import {
+  AutomaticInitialBaselineRunResult,
+  AutomaticDailyTrackingRunResult,
   CreateCompetitorInput,
   CreateProjectInput,
   ExecutionRecord,
@@ -43,6 +45,11 @@ export interface SetupProjectRequest {
   prompt_generation_payload?: PromptGenerationPayload;
 }
 
+const INTERNAL_AUTOMATION_ACTOR = {
+  user_id: "internal-automation",
+  role: "admin",
+} as const;
+
 export class OrchestrationService {
   constructor(
     private readonly project_service: ProjectService,
@@ -78,7 +85,8 @@ export class OrchestrationService {
     const competitors = input.competitors?.length
       ? await this.project_service.create_competitors(user, project.id, input.competitors)
       : [];
-    const warnings = await this.bootstrap_source_intelligence(project.id);
+    const warnings =
+      project.status === "active" ? await this.bootstrap_source_intelligence(project.id) : [];
 
     if (!input.generate_initial_prompts) {
       return {
@@ -191,6 +199,37 @@ export class OrchestrationService {
     return this.prompt_library_client.deactivate_prompt(project_id, prompt_id);
   }
 
+  async update_project(
+    user: AccessActor,
+    project_id: string,
+    input: Partial<{
+      name: string;
+      domain: string;
+      company_name: string;
+      primary_category: string;
+      target_region: string[];
+      target_language: string;
+      status: Project["status"];
+    }>,
+  ): Promise<Project> {
+    const existingProject = await this.project_service.assert_project_access(user, project_id);
+    const project = await this.project_service.update_project(user, project_id, input);
+
+    if (existingProject.status === "active" || project.status !== "active") {
+      return project;
+    }
+
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "project_setup");
+
+    await this.bootstrap_source_intelligence(project.id);
+
+    return project;
+  }
+
   async launch_baseline_scan(
     user: AccessActor,
     project_id: string,
@@ -295,6 +334,163 @@ export class OrchestrationService {
     return this.source_intelligence_client.get_prompt_context(project_id);
   }
 
+  async prepare_automatic_initial_baseline_run(project_id: string): Promise<
+    | {
+        triggered: true;
+        actor: typeof INTERNAL_AUTOMATION_ACTOR;
+        ai_model_ids: string[];
+        prompt_count: number;
+        metadata_json: Record<string, unknown>;
+      }
+    | {
+        triggered: false;
+        response: AutomaticInitialBaselineRunResult;
+      }
+  > {
+    const project = await this.project_service.assert_project_access(INTERNAL_AUTOMATION_ACTOR, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      INTERNAL_AUTOMATION_ACTOR,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "run_launch");
+
+    const existing_baseline_runs = await this.prompt_runner_client.list_run_batches(project_id, {
+      run_type: "baseline",
+      limit: 1,
+    });
+
+    const existing_run = existing_baseline_runs[0];
+
+    if (existing_run) {
+
+      return {
+        triggered: false,
+        response: {
+          project_id,
+          triggered: false,
+          reason: "baseline_already_exists",
+          run_batch_id: existing_run.id,
+          run_status: existing_run.status,
+          ai_model_ids: existing_run.ai_model_ids,
+          prompt_count: existing_run.prompt_ids.length,
+        },
+      };
+    }
+
+    const prompt_set = await this.prompt_library_client.get_prompt_set(project_id, "baseline");
+
+    if (prompt_set.prompt_ids.length === 0) {
+      throw new ValidationError("No prompts are available for the initial baseline run");
+    }
+
+    const selected_ai_models = await this.prompt_runner_client.list_ai_models({
+      is_active: true,
+      limit: organization.tracked_model_limit,
+    });
+    const ai_model_ids = selected_ai_models
+      .slice(0, organization.tracked_model_limit)
+      .map((model) => model.id);
+
+    if (ai_model_ids.length === 0) {
+      return {
+        triggered: false,
+        response: {
+          project_id,
+          triggered: false,
+          reason: "no_active_ai_models",
+          run_batch_id: null,
+          run_status: null,
+          ai_model_ids: [],
+          prompt_count: prompt_set.prompt_count,
+        },
+      };
+    }
+
+    return {
+      triggered: true,
+      actor: INTERNAL_AUTOMATION_ACTOR,
+      ai_model_ids,
+      prompt_count: prompt_set.prompt_count,
+      metadata_json: {
+        source: "core_automation",
+        trigger: "initial_baseline_after_onboarding",
+      },
+    };
+  }
+
+  async prepare_automatic_daily_tracking_run(project_id: string): Promise<
+    | {
+        triggered: true;
+        actor: typeof INTERNAL_AUTOMATION_ACTOR;
+        ai_model_ids: string[];
+        prompt_count: number;
+      }
+    | {
+        triggered: false;
+        response: AutomaticDailyTrackingRunResult;
+      }
+  > {
+    const project = await this.project_service.assert_project_access(INTERNAL_AUTOMATION_ACTOR, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      INTERNAL_AUTOMATION_ACTOR,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "run_launch");
+
+    const prompt_set = await this.prompt_library_client.get_prompt_set(project_id, "daily_tracking", {
+      limit: this.entitlement_service.get_daily_tracking_prompt_limit(organization),
+    });
+
+    if (prompt_set.prompt_ids.length === 0) {
+      throw new ValidationError("No prompts are available for daily tracking");
+    }
+
+    const selected_ai_models = await this.prompt_runner_client.list_ai_models({
+      is_active: true,
+      limit: organization.tracked_model_limit,
+    });
+    const ai_model_ids = selected_ai_models
+      .slice(0, organization.tracked_model_limit)
+      .map((model) => model.id);
+
+    if (ai_model_ids.length === 0) {
+      return {
+        triggered: false,
+        response: {
+          project_id,
+          triggered: false,
+          reason: "no_active_ai_models",
+          run_batch_id: null,
+          run_status: null,
+          ai_model_ids: [],
+          prompt_count: prompt_set.prompt_count,
+        },
+      };
+    }
+
+    return {
+      triggered: true,
+      actor: INTERNAL_AUTOMATION_ACTOR,
+      ai_model_ids,
+      prompt_count: prompt_set.prompt_count,
+    };
+  }
+
+  async trigger_refresh_crawl_automatically(project_id: string) {
+    const project = await this.project_service.assert_project_access(INTERNAL_AUTOMATION_ACTOR, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      INTERNAL_AUTOMATION_ACTOR,
+      project.organization_id,
+    );
+    this.entitlement_service.assert_compute_access(organization, "crawl_trigger");
+
+    return this.source_intelligence_client.create_crawl_runs(project_id, {
+      target_scope: "client",
+      scope_type: "incremental",
+      trigger_type: "refresh",
+    });
+  }
+
   async get_project_overview(user: AccessActor, project_id: string) {
     return this.dashboard_service.get_project_overview(user, project_id);
   }
@@ -331,6 +527,7 @@ export class OrchestrationService {
       project_id,
       {
         company_name: project.company_name,
+        company_category: project.primary_category,
         company_website: build_website_url(project.domain),
         company_region: project.target_region,
         company_language: project.target_language,
@@ -344,7 +541,8 @@ export class OrchestrationService {
     }
 
     const competitors = await this.project_service.create_competitors(user, project_id, inputs);
-    const warnings = await this.bootstrap_competitor_crawls(project_id);
+    const warnings =
+      project.status === "active" ? await this.bootstrap_competitor_crawls(project_id) : [];
 
     return {
       source: "generated",

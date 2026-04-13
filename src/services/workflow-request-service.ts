@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { type Pool, type PoolClient } from "pg";
 
 import {
+  AutomaticInitialBaselineRunResult,
+  AutomaticDailyTrackingRunResult,
   LaunchRunResult,
   SourceIntelligenceCrawlRequest,
   SourceIntelligenceCrawlRun,
@@ -118,6 +120,101 @@ export class WorkflowRequestService {
     },
   ): Promise<WorkflowResponse<LaunchRunResult>> {
     return this.launch_daily_tracking(input);
+  }
+
+  async launch_initial_baseline_automatically(
+    project_id: string,
+  ): Promise<WorkflowResponse<AutomaticInitialBaselineRunResult>> {
+    const plan = await this.orchestration_service.prepare_automatic_initial_baseline_run(project_id);
+
+    if (!plan.triggered) {
+      return {
+        response_status_code: 200,
+        response_body: plan.response,
+        replayed: false,
+      };
+    }
+
+    const launch = await this.launch_baseline_scan({
+      user: plan.actor,
+      project_id,
+      ai_model_ids: plan.ai_model_ids,
+      metadata_json: plan.metadata_json,
+      idempotency_key: `automatic-initial-baseline:${project_id}`,
+    });
+
+    return {
+      response_status_code: launch.response_status_code,
+      response_body: {
+        project_id,
+        triggered: true,
+        reason: null,
+        run_batch_id: launch.response_body.run_batch.id,
+        run_status: launch.response_body.run_batch.status,
+        ai_model_ids: launch.response_body.run_batch.ai_model_ids,
+        prompt_count: plan.prompt_count,
+      },
+      replayed: launch.replayed,
+    };
+  }
+
+  async launch_daily_tracking_automatically(
+    project_id: string,
+    metadata_json: Record<string, unknown> | undefined,
+    idempotency_key: string,
+  ): Promise<WorkflowResponse<AutomaticDailyTrackingRunResult>> {
+    const plan = await this.orchestration_service.prepare_automatic_daily_tracking_run(project_id);
+
+    if (!plan.triggered) {
+      return {
+        response_status_code: 200,
+        response_body: plan.response,
+        replayed: false,
+      };
+    }
+
+    const launch = await this.launch_daily_tracking({
+      user: plan.actor,
+      project_id,
+      ai_model_ids: plan.ai_model_ids,
+      metadata_json,
+      idempotency_key,
+    });
+
+    return {
+      response_status_code: launch.response_status_code,
+      response_body: {
+        project_id,
+        triggered: true,
+        reason: null,
+        run_batch_id: launch.response_body.run_batch.id,
+        run_status: launch.response_body.run_batch.status,
+        ai_model_ids: launch.response_body.run_batch.ai_model_ids,
+        prompt_count: plan.prompt_count,
+      },
+      replayed: launch.replayed,
+    };
+  }
+
+  trigger_refresh_crawl_automatically(input: {
+    project_id: string;
+    idempotency_key: string;
+  }): Promise<
+    WorkflowResponse<{
+      project_id: string;
+      crawl_runs: SourceIntelligenceCrawlRun[];
+    }>
+  > {
+    return this.execute_workflow({
+      operation: "crawl_trigger",
+      user_id: "internal-automation",
+      project_id: input.project_id,
+      idempotency_key: input.idempotency_key,
+      request_payload: {
+        trigger_type: "refresh",
+      },
+      callback: () => this.orchestration_service.trigger_refresh_crawl_automatically(input.project_id),
+    });
   }
 
   trigger_project_crawl(

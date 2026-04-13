@@ -147,7 +147,7 @@ export class PublicEdgeGuard {
 export function should_skip_public_edge_guard(method: string, path: string): boolean {
   const normalized_method = method.toUpperCase();
   const pathname = extract_pathname(path);
-  return normalized_method === "GET" && pathname === "/health";
+  return (normalized_method === "GET" && pathname === "/health") || pathname.startsWith("/internal/");
 }
 
 function classify_route(method: string, path: string): RouteCategory {

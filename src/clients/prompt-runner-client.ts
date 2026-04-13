@@ -1,4 +1,5 @@
 import {
+  PromptRunnerAiModel,
   ExecutionRecord,
   ListExecutionsFilters,
   ListRunBatchesFilters,
@@ -15,6 +16,7 @@ export interface PromptRunnerClient {
     project_id: string,
     input: {
       company_name: string;
+      company_category: string;
       company_website: string;
       company_region: string[];
       company_language: string;
@@ -31,6 +33,7 @@ export interface PromptRunnerClient {
     ai_model_ids: string[],
     metadata_json?: Record<string, unknown>,
   ): Promise<RunBatch>;
+  list_ai_models(filters?: { is_active?: boolean; limit?: number }): Promise<PromptRunnerAiModel[]>;
   get_run_batch(run_batch_id: string): Promise<RunBatch>;
   list_run_batches(
     project_id: string,

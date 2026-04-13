@@ -41,6 +41,65 @@ test("setup_project defers prompt generation until source intelligence is ready"
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
 });
 
+test("setup_project does not bootstrap source intelligence for draft projects", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+
+  const result = await context.services.orchestration_service.setup_project("user-1", {
+    organization_id: organization.id,
+    name: "Draft Project",
+    domain: "draft.example",
+    company_name: "Draft Inc",
+    primary_category: "SaaS",
+    target_region: ["United States"],
+    target_language: "en",
+    status: "draft",
+    generate_initial_prompts: false,
+  });
+
+  assert.equal(result.project.status, "draft");
+  assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 0);
+  assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 0);
+});
+
+test("prefill_project_competitors does not bootstrap crawls for draft projects", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id, {
+    status: "draft",
+  });
+
+  const result = await context.services.orchestration_service.prefill_project_competitors(
+    "user-1",
+    project.id,
+  );
+
+  assert.equal(result.source, "generated");
+  assert.equal(result.competitors.length, 3);
+  assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 0);
+  assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 0);
+});
+
+test("update_project bootstraps source intelligence when a draft project becomes active", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id, {
+    status: "draft",
+  });
+
+  const updated = await context.services.orchestration_service.update_project(
+    "user-1",
+    project.id,
+    {
+      status: "active",
+    },
+  );
+
+  assert.equal(updated.status, "active");
+  assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
+  assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
+});
+
 test("regenerate_project_prompts throws when source intelligence is not ready", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
@@ -169,6 +228,75 @@ test("launch_daily_tracking creates a run batch from the daily prompt set", asyn
   assert.equal(result.prompt_set.run_type, "daily_tracking");
   assert.equal(result.run_batch.run_type, "daily_tracking");
   assert.equal(result.run_batch.execution_count, 1);
+});
+
+test("prepare_automatic_initial_baseline_run selects active models up to the plan limit", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+  context.seed_prompt_set(project.id, "baseline", ["prompt-1"]);
+
+  const plan = await context.services.orchestration_service.prepare_automatic_initial_baseline_run(
+    project.id,
+  );
+
+  assert.equal(plan.triggered, true);
+
+  if (!plan.triggered) {
+    throw new Error("Expected the automatic baseline plan to trigger");
+  }
+
+  assert.equal(plan.ai_model_ids.length, 3);
+  assert.deepEqual(plan.ai_model_ids, ["gpt-5.4", "claude-sonnet", "gemini-2.5-pro"]);
+  assert.equal(plan.prompt_count, 1);
+  assert.equal(plan.metadata_json.trigger, "initial_baseline_after_onboarding");
+});
+
+test("prepare_automatic_initial_baseline_run skips when a baseline already exists", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+  context.seed_prompt_set(project.id, "baseline", ["prompt-1"]);
+  await context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+    "gpt-5.4",
+  ]);
+
+  const plan = await context.services.orchestration_service.prepare_automatic_initial_baseline_run(
+    project.id,
+  );
+
+  assert.equal(plan.triggered, false);
+
+  if (plan.triggered) {
+    throw new Error("Expected the automatic baseline plan to be skipped");
+  }
+
+  assert.equal(plan.response.reason, "baseline_already_exists");
+  assert.ok(plan.response.run_batch_id);
 });
 
 test("project creation is blocked when the organization reaches the domain limit", async () => {
@@ -446,6 +574,10 @@ test("prefill_project_competitors generates competitors once and enqueues compet
     context.clients.prompt_runner_client.last_generate_competitor_suggestions_request?.company_name,
     "Acme",
   );
+  assert.equal(
+    context.clients.prompt_runner_client.last_generate_competitor_suggestions_request?.company_category,
+    "SaaS",
+  );
 });
 
 test("setup_project rejects competitor payloads beyond the starter plan cap", async () => {
@@ -530,6 +662,7 @@ test("setup_project returns partial_success when source intelligence bootstrap f
     primary_category: "SaaS",
     target_region: ["United States"],
     target_language: "en",
+    status: "active",
     generate_initial_prompts: false,
   });
 

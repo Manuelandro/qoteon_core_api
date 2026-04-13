@@ -1,4 +1,5 @@
 import {
+  PromptRunnerAiModel,
   ExecutionRecord,
   ListExecutionsFilters,
   ListRunBatchesFilters,
@@ -19,6 +20,7 @@ export class HttpPromptRunnerClient implements PromptRunnerClient {
     project_id: string,
     input: {
       company_name: string;
+      company_category: string;
       company_website: string;
       company_region: string[];
       company_language: string;
@@ -72,6 +74,12 @@ export class HttpPromptRunnerClient implements PromptRunnerClient {
         ai_model_ids,
         metadata_json: metadata_json ?? null,
       },
+    });
+  }
+
+  async list_ai_models(filters?: { is_active?: boolean; limit?: number }): Promise<PromptRunnerAiModel[]> {
+    return this.client.request("GET", "/internal/ai-models", {
+      query: filters,
     });
   }
 

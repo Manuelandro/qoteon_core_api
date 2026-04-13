@@ -1,9 +1,13 @@
+import { existsSync } from "node:fs";
+
 import { z } from "zod";
 
 export const DEFAULT_PROMPT_LIBRARY_BASE_URL = "http://qoteon-prompt-library:3000";
 export const DEFAULT_PROMPT_RUNNER_BASE_URL = "http://qoteon-prompt-runner-api:3000";
 export const DEFAULT_SOURCE_INTELLIGENCE_BASE_URL = "http://qoteon-source-intelligence-api:3000";
 export const DEFAULT_DASHBOARD_LAYER_BASE_URL = "http://qoteon-dashboard-layer:4020";
+export const DEFAULT_RECONCILER_BASE_URL = "http://qoteon-reconciler:4030";
+export const DEFAULT_DAILY_RUNNER_BASE_URL = "http://qoteon-daily-runner:4040";
 export const DATABASE_SSL_MODES = [
   "disable",
   "allow",
@@ -35,6 +39,7 @@ const env_schema = z.object({
   DATABASE_SSL_CERT_FILE: optional_non_empty_string,
   DATABASE_SSL_KEY_FILE: optional_non_empty_string,
   DATABASE_CA_CERT_PATH: optional_non_empty_string,
+  INTERNAL_AUTH_TOKEN: z.string().min(1),
   SUPABASE_URL: z.string().url(),
   SUPABASE_ANON_KEY: z.string().min(1),
   PROMPT_LIBRARY_BASE_URL: z.string().url().default(DEFAULT_PROMPT_LIBRARY_BASE_URL),
@@ -45,6 +50,10 @@ const env_schema = z.object({
   SOURCE_INTELLIGENCE_AUTH_TOKEN: optional_string,
   DASHBOARD_LAYER_BASE_URL: z.string().url().default(DEFAULT_DASHBOARD_LAYER_BASE_URL),
   DASHBOARD_LAYER_AUTH_TOKEN: optional_string,
+  RECONCILER_BASE_URL: z.string().url().default(DEFAULT_RECONCILER_BASE_URL),
+  RECONCILER_AUTH_TOKEN: optional_string,
+  DAILY_RUNNER_BASE_URL: z.string().url().default(DEFAULT_DAILY_RUNNER_BASE_URL),
+  DAILY_RUNNER_AUTH_TOKEN: optional_string,
   CORE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   CORE_RATE_LIMIT_DEFAULT_MAX: z.coerce.number().int().positive().default(240),
   CORE_RATE_LIMIT_PROJECT_CREATE_MAX: z.coerce.number().int().positive().default(20),
@@ -62,6 +71,18 @@ const env_schema = z.object({
 
 export type Env = z.infer<typeof env_schema>;
 
+export function load_env_file_if_present(env_file_path = ".env"): void {
+  if (!existsSync(env_file_path)) {
+    return;
+  }
+
+  process.loadEnvFile(env_file_path);
+}
+
 export function read_env(source: NodeJS.ProcessEnv = process.env): Env {
+  if (source === process.env) {
+    load_env_file_if_present();
+  }
+
   return env_schema.parse(source);
 }

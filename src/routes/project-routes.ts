@@ -50,7 +50,7 @@ export async function register_project_routes(
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(project_update_request_schema, request.body);
 
-    return services.project_service.update_project(
+    return services.orchestration_service.update_project(
       request.current_user,
       params.project_id,
       body,

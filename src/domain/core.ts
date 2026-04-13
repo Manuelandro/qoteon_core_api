@@ -491,6 +491,19 @@ export interface PromptSyncRecord {
   runner_prompt_id: string;
 }
 
+export interface PromptRunnerAiModel {
+  id: string;
+  provider_name: string;
+  model_name: string;
+  api_mode: string;
+  is_active: boolean;
+  timeout_seconds: number;
+  max_retries: number;
+  rate_limit_group: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface PromptSet {
   project_id: string;
   run_type: RunType;
@@ -562,6 +575,26 @@ export interface PromptRunnerCompetitorSuggestion {
   name: string;
   website: string;
   icon: string;
+}
+
+export interface AutomaticInitialBaselineRunResult {
+  project_id: string;
+  triggered: boolean;
+  reason: "baseline_already_exists" | "no_active_ai_models" | null;
+  run_batch_id: string | null;
+  run_status: string | null;
+  ai_model_ids: string[];
+  prompt_count: number;
+}
+
+export interface AutomaticDailyTrackingRunResult {
+  project_id: string;
+  triggered: boolean;
+  reason: "no_active_ai_models" | null;
+  run_batch_id: string | null;
+  run_status: string | null;
+  ai_model_ids: string[];
+  prompt_count: number;
 }
 
 export interface SourceIntelligenceCrawlTarget {

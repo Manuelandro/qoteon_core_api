@@ -1,14 +1,17 @@
 import Fastify, { FastifyInstance } from "fastify";
 
 import { read_env, Env } from "./config/env";
-import { AppError } from "./errors/app-error";
+import { AppError, UnauthorizedError } from "./errors/app-error";
 import { create_app_runtime, AppServices } from "./build-services";
 import {
   PublicEdgeAdmissionToken,
   PublicEdgeGuard,
   should_skip_public_edge_guard,
 } from "./lib/public-edge-guard";
+import { register_admin_daily_runner_routes } from "./routes/admin-daily-runner-routes";
 import { register_health_routes } from "./routes/health-routes";
+import { register_admin_reconciliation_routes } from "./routes/admin-reconciliation-routes";
+import { register_internal_workflow_routes } from "./routes/internal-workflow-routes";
 import { register_organization_routes } from "./routes/organization-routes";
 import { register_overview_routes } from "./routes/overview-routes";
 import { register_project_routes } from "./routes/project-routes";
@@ -23,13 +26,13 @@ export interface BuildAppOptions {
 
 export function build_app(options: BuildAppOptions = {}): FastifyInstance {
   const env = options.env ?? read_env();
-  const runtime = options.services ? null : create_app_runtime(env);
-  const services = options.services ?? runtime!.services;
-
   const app = Fastify({
     logger: options.logger ?? false,
     trustProxy: env.CORE_TRUST_PROXY,
+    disableRequestLogging: true,
   });
+  const runtime = options.services ? null : create_app_runtime(env, app.log);
+  const services = options.services ?? runtime!.services;
   const public_edge_guard = new PublicEdgeGuard({
     rate_limit_window_ms: env.CORE_RATE_LIMIT_WINDOW_MS,
     rate_limit_default_max: env.CORE_RATE_LIMIT_DEFAULT_MAX,
@@ -80,7 +83,29 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
 
   void register_health_routes(app);
 
+  app.register(async (internal_app) => {
+    internal_app.addHook("preHandler", async (request) => {
+      const authorization = request.headers.authorization;
+
+      if (authorization !== `Bearer ${env.INTERNAL_AUTH_TOKEN}`) {
+        throw new UnauthorizedError("Invalid internal auth token");
+      }
+    });
+
+    await register_internal_workflow_routes(internal_app, services);
+  }, { prefix: "/internal" });
+
   app.addHook("onRequest", async (request) => {
+    request.log.info(
+      {
+        request_id: request.id,
+        method: request.method,
+        url: request.url,
+        remote_ip: request.ip,
+      },
+      "Incoming request to Core API",
+    );
+
     if (should_skip_public_edge_guard(request.method, request.url)) {
       return;
     }
@@ -94,8 +119,20 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
     admission_tokens.set(request, token);
   });
 
-  app.addHook("onResponse", async (request) => {
+  app.addHook("onResponse", async (request, reply) => {
     const token = admission_tokens.get(request);
+
+    request.log.info(
+      {
+        request_id: request.id,
+        method: request.method,
+        url: request.url,
+        status_code: reply.statusCode,
+        user_id: request.current_user?.user_id,
+        user_role: request.current_user?.role,
+      },
+      "Response sent by Core API",
+    );
 
     if (!token) {
       return;
@@ -114,6 +151,8 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
     await register_project_routes(protected_app, services);
     await register_workflow_routes(protected_app, services);
     await register_overview_routes(protected_app, services);
+    await register_admin_reconciliation_routes(protected_app, services);
+    await register_admin_daily_runner_routes(protected_app, services);
   });
 
   return app;

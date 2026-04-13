@@ -234,6 +234,34 @@ test("competitor CRUD routes work end to end", async (t) => {
   assert.equal(final_list_response.json().competitors.length, 0);
 });
 
+test("project patch route activates a draft project and starts source intelligence bootstrap", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id, {
+    status: "draft",
+  });
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "PATCH",
+    url: `/projects/${project.id}`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+    payload: {
+      status: "active",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().status, "active");
+  assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
+  assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
+});
+
 test("starter plan competitor route rejects additions beyond three competitors", async (t) => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");

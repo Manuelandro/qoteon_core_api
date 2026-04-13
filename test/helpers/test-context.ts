@@ -2,6 +2,8 @@ import { build_app } from "../../src/app";
 import { read_env } from "../../src/config/env";
 import { AuthenticatedUser, Organization, Project, PromptRecord, RunProgress, RunType } from "../../src/domain/core";
 import { DashboardService } from "../../src/services/dashboard-service";
+import { AdminRunService } from "../../src/services/admin-run-service";
+import { DailyRunnerAdminService } from "../../src/services/daily-runner-admin-service";
 import { AuthService } from "../../src/services/auth-service";
 import { EntitlementService } from "../../src/services/entitlement-service";
 import { OrchestrationService } from "../../src/services/orchestration-service";
@@ -17,10 +19,13 @@ import {
 import { get_plan_definition } from "../../src/lib/plan-catalog";
 import {
   FakeDashboardLayerClient,
+  FakeDailyRunnerClient,
   FakePromptLibraryClient,
   FakePromptRunnerClient,
+  FakeReconcilerClient,
   FakeSourceIntelligenceClient,
 } from "../fakes/fake-clients";
+import { ReconcilerAdminService } from "../../src/services/reconciler-admin-service";
 import {
   InMemoryWorkflowConcurrencyGuard,
   WorkflowRequestService,
@@ -56,6 +61,8 @@ export function create_test_context() {
   const prompt_runner_client = new FakePromptRunnerClient();
   const source_intelligence_client = new FakeSourceIntelligenceClient();
   const dashboard_layer_client = new FakeDashboardLayerClient();
+  const reconciler_client = new FakeReconcilerClient();
+  const daily_runner_client = new FakeDailyRunnerClient();
   const auth_service = new TestAuthService();
 
   const entitlement_service = new EntitlementService(organization_usage_repository);
@@ -88,6 +95,9 @@ export function create_test_context() {
       require_idempotency_header: false,
     },
   );
+  const reconciler_admin_service = new ReconcilerAdminService(reconciler_client);
+  const daily_runner_admin_service = new DailyRunnerAdminService(daily_runner_client);
+  const admin_run_service = new AdminRunService(reconciler_client, daily_runner_client);
 
   const services: AppServices = {
     auth_service,
@@ -96,6 +106,9 @@ export function create_test_context() {
     dashboard_service,
     orchestration_service,
     workflow_request_service,
+    reconciler_admin_service,
+    daily_runner_admin_service,
+    admin_run_service,
   };
 
   return {
@@ -110,6 +123,8 @@ export function create_test_context() {
       prompt_runner_client,
       source_intelligence_client,
       dashboard_layer_client,
+      reconciler_client,
+      daily_runner_client,
     },
     set_current_user(user: Partial<AuthenticatedUser> & Pick<AuthenticatedUser, "user_id">) {
       auth_service.set_current_user(user);
@@ -119,6 +134,7 @@ export function create_test_context() {
         logger: false,
         env: read_env({
           DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres",
+          INTERNAL_AUTH_TOKEN: "qoteon-local-core-token",
           SUPABASE_URL: "https://example.supabase.co",
           SUPABASE_ANON_KEY: "test-anon-key",
           ...env_overrides,
