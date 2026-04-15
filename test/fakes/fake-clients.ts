@@ -6,6 +6,7 @@ import {
   DashboardCompetitorsFilters,
   DashboardModelBreakdown,
   DashboardModelsFilters,
+  DashboardPromptBreakdown,
   DashboardProjectCard,
   DashboardProjectOverview,
   DashboardProjectsFilters,
@@ -18,6 +19,7 @@ import {
   ListRunBatchesFilters,
   PromptGenerationPayload,
   PromptGenerationResult,
+  PromptLibraryItem,
   PromptRunnerAiModel,
   PromptRunnerCompetitorSuggestion,
   PromptListFilters,
@@ -45,6 +47,9 @@ import {
 } from "../../src/clients/reconciler-client";
 import { SourceIntelligenceClient } from "../../src/clients/source-intelligence-client";
 
+const ACTIVE_TRACKED_PROMPT_COUNT = 5;
+const TARGET_PROJECT_PROMPT_LIBRARY_COUNT = 150;
+
 export class FakePromptLibraryClient implements PromptLibraryClient {
   readonly prompts_by_project = new Map<string, PromptRecord[]>();
   readonly prompt_sets = new Map<string, PromptSet>();
@@ -62,7 +67,7 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
     }
 
     const existing = this.prompts_by_project.get(project_id) ?? [];
-    const generated_count = 3;
+    const generated_count = TARGET_PROJECT_PROMPT_LIBRARY_COUNT;
     const prompts = [...existing];
 
     for (let index = 0; index < generated_count; index += 1) {
@@ -70,11 +75,11 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
         id: `prompt-${++this.prompt_counter}`,
         project_id,
         title: `Prompt ${this.prompt_counter}`,
-        body: `Best ${payload.category ?? "brand visibility"} option ${this.prompt_counter}`,
+        body: `Prompt body ${this.prompt_counter}`,
         status: "ready",
-        is_active: true,
-        cluster: index % 2 === 0 ? "brand" : "comparison",
-        intent: index % 2 === 0 ? "commercial_discovery" : "comparison",
+        is_active: index < ACTIVE_TRACKED_PROMPT_COUNT,
+        cluster: `llm_generated_${index + 1}`,
+        intent: "commercial_discovery",
         metadata_json: payload.metadata_json ?? null,
       });
     }
@@ -140,11 +145,75 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
   }
 
   async activate_prompt(project_id: string, prompt_id: string): Promise<PromptRecord> {
-    return this.update_prompt(project_id, prompt_id, true);
+    return this.update_prompt_activation(project_id, prompt_id, true);
   }
 
   async deactivate_prompt(project_id: string, prompt_id: string): Promise<PromptRecord> {
-    return this.update_prompt(project_id, prompt_id, false);
+    return this.update_prompt_activation(project_id, prompt_id, false);
+  }
+
+  async update_prompt(project_id: string, prompt_id: string, prompt_text: string): Promise<PromptRecord> {
+    const prompt = this.find_prompt(project_id, prompt_id);
+    prompt.body = prompt_text.trim();
+    prompt.title = prompt.body.slice(0, 80);
+    prompt.updated_at = new Date().toISOString();
+    return prompt;
+  }
+
+  async delete_prompt(project_id: string, prompt_id: string): Promise<PromptRecord> {
+    const prompt = this.find_prompt(project_id, prompt_id);
+    prompt.is_active = false;
+    prompt.status = "archived";
+    prompt.archived_at = new Date().toISOString();
+    this.refresh_prompt_sets(project_id);
+    return prompt;
+  }
+
+  async list_prompt_library(
+    project_id: string,
+    filters?: { search?: string; limit?: number },
+  ): Promise<PromptLibraryItem[]> {
+    let items = (this.prompts_by_project.get(project_id) ?? [])
+      .filter((prompt) => prompt.status !== "archived")
+      .map((prompt) => ({
+        id: prompt.id,
+        prompt_text: prompt.body ?? prompt.title,
+        cluster_name: prompt.cluster ?? "unclustered",
+        intent_type: prompt.intent ?? "commercial_discovery",
+        language: "en",
+        region: null,
+        source_type: "llm_generated",
+        is_active: true,
+        metadata_json: prompt.metadata_json ?? null,
+        imported_project_prompt_id: prompt.is_active ? prompt.id : null,
+        is_imported: prompt.is_active,
+        created_at: prompt.created_at,
+        updated_at: prompt.updated_at,
+      }));
+
+    if (filters?.search) {
+      const query = filters.search.toLowerCase();
+      items = items.filter(
+        (item) =>
+          item.prompt_text.toLowerCase().includes(query) ||
+          item.cluster_name.toLowerCase().includes(query) ||
+          item.intent_type.toLowerCase().includes(query),
+      );
+    }
+
+    if (filters?.limit) {
+      items = items.slice(0, filters.limit);
+    }
+
+    return items;
+  }
+
+  async import_prompt_library_item(project_id: string, prompt_id: string): Promise<PromptRecord> {
+    const prompt = this.find_prompt(project_id, prompt_id);
+    prompt.is_active = true;
+    prompt.updated_at = new Date().toISOString();
+    this.refresh_prompt_sets(project_id);
+    return prompt;
   }
 
   set_prompts(project_id: string, prompts: PromptRecord[]): void {
@@ -158,6 +227,25 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
     this.refresh_prompt_sets(project_id);
   }
 
+  set_prompt_library_items(project_id: string, items: PromptLibraryItem[]): void {
+    const existingPrompts = this.prompts_by_project.get(project_id) ?? [];
+    const seededPrompts = items.map((item) => ({
+      id: item.id,
+      project_id,
+      title: item.prompt_text.slice(0, 80),
+      body: item.prompt_text,
+      status: "ready",
+      is_active: item.is_imported,
+      cluster: item.cluster_name,
+      intent: item.intent_type,
+      metadata_json: item.metadata_json ?? null,
+      created_at: item.created_at,
+      updated_at: item.updated_at,
+    }));
+    this.prompts_by_project.set(project_id, [...existingPrompts, ...seededPrompts]);
+    this.refresh_prompt_sets(project_id);
+  }
+
   set_prompt_set(project_id: string, run_type: RunType, prompt_ids: string[]): void {
     this.prompt_sets.set(this.prompt_set_key(project_id, run_type), {
       project_id,
@@ -168,7 +256,18 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
     });
   }
 
-  private update_prompt(project_id: string, prompt_id: string, is_active: boolean): PromptRecord {
+  private update_prompt_activation(
+    project_id: string,
+    prompt_id: string,
+    is_active: boolean,
+  ): PromptRecord {
+    const prompt = this.find_prompt(project_id, prompt_id);
+    prompt.is_active = is_active;
+    this.refresh_prompt_sets(project_id);
+    return prompt;
+  }
+
+  private find_prompt(project_id: string, prompt_id: string): PromptRecord {
     const prompts = this.prompts_by_project.get(project_id) ?? [];
     const prompt = prompts.find((entry) => entry.id === prompt_id);
 
@@ -176,8 +275,6 @@ export class FakePromptLibraryClient implements PromptLibraryClient {
       throw new NotFoundError("Prompt not found");
     }
 
-    prompt.is_active = is_active;
-    this.refresh_prompt_sets(project_id);
     return prompt;
   }
 
@@ -322,6 +419,7 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
   readonly run_progress = new Map<string, RunProgress>();
   readonly executions_by_batch = new Map<string, ExecutionRecord[]>();
   readonly synced_prompts = new Map<string, string>();
+  readonly source_prompts_by_runner_id = new Map<string, string>();
   readonly ai_models: PromptRunnerAiModel[] = [
     {
       id: "gpt-5.4",
@@ -430,6 +528,7 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
     return prompts.map((prompt) => {
       const runner_prompt_id = `runner-${project_id}-${prompt.id}`;
       this.synced_prompts.set(prompt.id, runner_prompt_id);
+      this.source_prompts_by_runner_id.set(runner_prompt_id, prompt.id);
 
       return {
         source_prompt_id: prompt.id,
@@ -454,6 +553,9 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
     }
 
     const run_batch_id = `run-${++this.run_batch_counter}`;
+    const source_prompt_ids = prompt_ids.map(
+      (prompt_id) => this.source_prompts_by_runner_id.get(prompt_id) ?? prompt_id,
+    );
     const execution_count = prompt_ids.length * ai_model_ids.length;
     const created_at = new Date().toISOString();
     const run_batch: RunBatch = {
@@ -461,7 +563,7 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
       project_id,
       run_type,
       status: "queued",
-      prompt_ids,
+      prompt_ids: source_prompt_ids,
       ai_model_ids,
       execution_count,
       created_at,
@@ -472,7 +574,7 @@ export class FakePromptRunnerClient implements PromptRunnerClient {
 
     const executions: ExecutionRecord[] = [];
 
-    for (const prompt_id of prompt_ids) {
+    for (const prompt_id of source_prompt_ids) {
       for (const ai_model_id of ai_model_ids) {
         executions.push({
           id: `execution-${++this.execution_counter}`,
@@ -622,6 +724,10 @@ export class FakeReconcilerClient implements ReconcilerClient {
     reconciliation_state: null,
     diagnostics: {
       baselineRuns: [],
+      dashboardSummary: {
+        hasData: false,
+        runBatchId: null,
+      },
     },
     detected_state: "baseline_missing",
     recommended_next_action: "Launch the first baseline run through Core.",
@@ -816,6 +922,7 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   project_overview_response: DashboardProjectOverview | null = null;
   portfolio_projects_response: DashboardProjectCard[] = [];
   visibility_summary_response: DashboardVisibilitySummary | null = null;
+  prompt_breakdown_response: DashboardPromptBreakdown | null = null;
   model_breakdown_response: DashboardModelBreakdown | null = null;
   cluster_breakdown_response: DashboardClusterBreakdown | null = null;
   competitor_breakdown_response: DashboardCompetitorBreakdown | null = null;
@@ -829,6 +936,17 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
     | null = null;
   last_model_request:
     | { user_id: string; project_id: string; filters?: DashboardModelsFilters }
+    | null = null;
+  last_prompt_request:
+    | {
+        user_id: string;
+        project_id: string;
+        filters?: {
+          limit?: number;
+          sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
+          sortDirection?: "asc" | "desc";
+        };
+      }
     | null = null;
   last_cluster_request:
     | { user_id: string; project_id: string; filters?: DashboardClustersFilters }
@@ -893,6 +1011,26 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
     }
 
     return this.model_breakdown_response;
+  }
+
+  async get_prompt_breakdown(
+    user: AccessActor,
+    project_id: string,
+    filters?: {
+      limit?: number;
+      sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
+      sortDirection?: "asc" | "desc";
+    },
+  ): Promise<DashboardPromptBreakdown> {
+    const actor = resolve_access_actor(user);
+    this.last_prompt_request = { user_id: actor.user_id, project_id, filters };
+    this.throw_if_needed();
+
+    if (!this.prompt_breakdown_response) {
+      throw new NotFoundError("Dashboard prompt breakdown not found");
+    }
+
+    return this.prompt_breakdown_response;
   }
 
   async get_cluster_breakdown(

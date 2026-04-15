@@ -13,7 +13,9 @@ import {
   PromptRunnerCompetitorSuggestion,
   PromptGenerationPayload,
   PromptGenerationResult,
+  PromptLibraryItem,
   PromptListFilters,
+  PromptCapacitySummary,
   PromptRecord,
   PromptSetSummary,
   RunBatch,
@@ -21,7 +23,7 @@ import {
   RunType,
   SetupProjectResult,
 } from "../domain/core";
-import { ConflictError, ValidationError } from "../errors/app-error";
+import { NotFoundError, ValidationError } from "../errors/app-error";
 import { AccessActor } from "../lib/access-actor";
 import { to_service_warning } from "../lib/warnings";
 import { PromptLibraryClient } from "../clients/prompt-library-client";
@@ -49,6 +51,17 @@ const INTERNAL_AUTOMATION_ACTOR = {
   user_id: "internal-automation",
   role: "admin",
 } as const;
+
+function sameIdSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const leftIds = [...left].sort();
+  const rightIds = [...right].sort();
+
+  return leftIds.every((value, index) => value === rightIds[index]);
+}
 
 export class OrchestrationService {
   constructor(
@@ -86,32 +99,36 @@ export class OrchestrationService {
       ? await this.project_service.create_competitors(user, project.id, input.competitors)
       : [];
     const warnings =
-      project.status === "active" ? await this.bootstrap_source_intelligence(project.id) : [];
-
-    if (!input.generate_initial_prompts) {
-      return {
-        status: warnings.length > 0 ? "partial_success" : "success",
-        project,
-        competitors,
-        prompt_generation: {
-          attempted: false,
-          succeeded: false,
-          result: null,
-        },
-        warnings,
-      };
-    }
+      project.status === "active"
+        ? await this.bootstrap_source_intelligence(project.id)
+        : [];
+    const automaticPromptGeneration =
+      project.status === "active"
+        ? await this.generate_prompts_for_active_project(
+            user,
+            project,
+            input.prompt_generation_payload,
+          )
+        : {
+            attempted: false,
+            succeeded: false,
+            result: null,
+            warnings: [] as SetupProjectResult["warnings"],
+          };
 
     return {
-      status: warnings.length > 0 ? "partial_success" : "success",
+      status:
+        warnings.length > 0 || automaticPromptGeneration.warnings.length > 0
+          ? "partial_success"
+          : "success",
       project,
       competitors,
       prompt_generation: {
-        attempted: false,
-        succeeded: false,
-        result: null,
+        attempted: automaticPromptGeneration.attempted,
+        succeeded: automaticPromptGeneration.succeeded,
+        result: automaticPromptGeneration.result,
       },
-      warnings,
+      warnings: [...warnings, ...automaticPromptGeneration.warnings],
     };
   }
 
@@ -126,25 +143,10 @@ export class OrchestrationService {
       project.organization_id,
     );
     this.entitlement_service.assert_compute_access(organization, "prompt_generation");
-    const prompt_context = await this.source_intelligence_client.get_prompt_context(project_id);
-
-    if (!prompt_context.is_ready_for_prompt_generation) {
-      throw new ConflictError(
-        "Prompt generation is blocked until Source Intelligence completes a successful crawl",
-        {
-          project_id,
-          blockers: prompt_context.prompt_generation_blockers,
-          last_successful_crawl_at: prompt_context.last_successful_crawl_at,
-          crawl_coverage: prompt_context.crawl_coverage,
-        },
-      );
-    }
-
-    const competitors = await this.project_service.list_competitors(user, project_id);
 
     return this.prompt_library_client.generate_project_prompts(
       project_id,
-      build_prompt_generation_payload(project, competitors, payload),
+      payload,
     );
   }
 
@@ -186,7 +188,19 @@ export class OrchestrationService {
   }
 
   async activate_prompt(user: AccessActor, project_id: string, prompt_id: string): Promise<PromptRecord> {
-    await this.project_service.assert_project_access(user, project_id);
+    const project = await this.project_service.assert_project_access(user, project_id);
+    const prompt = (await this.prompt_library_client.list_project_prompts(project_id)).find(
+      (entry) => entry.id === prompt_id,
+    );
+
+    if (!prompt) {
+      throw new NotFoundError("Prompt not found");
+    }
+
+    if (!prompt.is_active) {
+      await this.assert_prompt_capacity_available(user, project, 1);
+    }
+
     return this.prompt_library_client.activate_prompt(project_id, prompt_id);
   }
 
@@ -197,6 +211,87 @@ export class OrchestrationService {
   ): Promise<PromptRecord> {
     await this.project_service.assert_project_access(user, project_id);
     return this.prompt_library_client.deactivate_prompt(project_id, prompt_id);
+  }
+
+  async update_prompt(
+    user: AccessActor,
+    project_id: string,
+    prompt_id: string,
+    prompt_text: string,
+  ): Promise<PromptRecord> {
+    await this.project_service.assert_project_access(user, project_id);
+    return this.prompt_library_client.update_prompt(project_id, prompt_id, prompt_text);
+  }
+
+  async delete_prompt(
+    user: AccessActor,
+    project_id: string,
+    prompt_id: string,
+  ): Promise<PromptRecord> {
+    await this.project_service.assert_project_access(user, project_id);
+    return this.prompt_library_client.delete_prompt(project_id, prompt_id);
+  }
+
+  async list_prompt_library(
+    user: AccessActor,
+    project_id: string,
+    filters?: { search?: string; limit?: number },
+  ): Promise<PromptLibraryItem[]> {
+    await this.project_service.assert_project_access(user, project_id);
+    return this.prompt_library_client.list_prompt_library(project_id, filters);
+  }
+
+  async import_prompt_library_item(
+    user: AccessActor,
+    project_id: string,
+    prompt_id: string,
+  ): Promise<PromptRecord> {
+    const project = await this.project_service.assert_project_access(user, project_id);
+    const libraryItem = (await this.prompt_library_client.list_prompt_library(project_id)).find(
+      (entry) => entry.id === prompt_id,
+    );
+
+    if (!libraryItem) {
+      throw new NotFoundError("Prompt not found");
+    }
+
+    if (!libraryItem.is_imported) {
+      await this.assert_prompt_capacity_available(user, project, 1);
+    }
+
+    return this.prompt_library_client.import_prompt_library_item(project_id, prompt_id);
+  }
+
+  async get_prompt_capacity_summary(
+    user: AccessActor,
+    project_id: string,
+  ): Promise<PromptCapacitySummary> {
+    const project = await this.project_service.assert_project_access(user, project_id);
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    const activePromptCount = await this.count_active_workspace_prompts(user, organization.id);
+    const activeProjectPromptCount = (
+      await this.prompt_library_client.list_project_prompts(project_id, { is_active: true })
+    ).length;
+    const usageCounter = await this.entitlement_service.get_usage_counter(
+      organization,
+      "tracked_prompts_daily",
+    );
+    const dailyUsed = usageCounter?.used_count ?? 0;
+    const limit = organization.tracked_prompts_daily_limit;
+
+    return {
+      project_id,
+      organization_id: organization.id,
+      tracked_prompt_limit: limit,
+      tracked_prompts_in_use: activePromptCount,
+      tracked_prompts_remaining: Math.max(limit - activePromptCount, 0),
+      active_project_prompt_count: activeProjectPromptCount,
+      daily_tracked_prompts_used: dailyUsed,
+      daily_tracked_prompts_remaining: Math.max(limit - dailyUsed, 0),
+    };
   }
 
   async update_project(
@@ -226,6 +321,7 @@ export class OrchestrationService {
     this.entitlement_service.assert_compute_access(organization, "project_setup");
 
     await this.bootstrap_source_intelligence(project.id);
+    await this.generate_prompts_for_active_project(user, project);
 
     return project;
   }
@@ -354,6 +450,44 @@ export class OrchestrationService {
     );
     this.entitlement_service.assert_compute_access(organization, "run_launch");
 
+    let prompt_set;
+
+    try {
+      prompt_set = await this.prompt_library_client.get_prompt_set(project_id, "baseline");
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) {
+        throw error;
+      }
+
+      return {
+        triggered: false,
+        response: {
+          project_id,
+          triggered: false,
+          reason: "no_prompts_available",
+          run_batch_id: null,
+          run_status: null,
+          ai_model_ids: [],
+          prompt_count: 0,
+        },
+      };
+    }
+
+    if (prompt_set.prompt_ids.length === 0) {
+      return {
+        triggered: false,
+        response: {
+          project_id,
+          triggered: false,
+          reason: "no_prompts_available",
+          run_batch_id: null,
+          run_status: null,
+          ai_model_ids: [],
+          prompt_count: 0,
+        },
+      };
+    }
+
     const existing_baseline_runs = await this.prompt_runner_client.list_run_batches(project_id, {
       run_type: "baseline",
       limit: 1,
@@ -361,8 +495,7 @@ export class OrchestrationService {
 
     const existing_run = existing_baseline_runs[0];
 
-    if (existing_run) {
-
+    if (existing_run && sameIdSet(existing_run.prompt_ids, prompt_set.prompt_ids)) {
       return {
         triggered: false,
         response: {
@@ -375,12 +508,6 @@ export class OrchestrationService {
           prompt_count: existing_run.prompt_ids.length,
         },
       };
-    }
-
-    const prompt_set = await this.prompt_library_client.get_prompt_set(project_id, "baseline");
-
-    if (prompt_set.prompt_ids.length === 0) {
-      throw new ValidationError("No prompts are available for the initial baseline run");
     }
 
     const selected_ai_models = await this.prompt_runner_client.list_ai_models({
@@ -683,6 +810,52 @@ export class OrchestrationService {
     return this.bootstrap_source_intelligence_targets(project_id, "all");
   }
 
+  private async assert_prompt_capacity_available(
+    user: AccessActor,
+    project: Project,
+    additional_prompt_count: number,
+  ): Promise<void> {
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    const activePromptCount = await this.count_active_workspace_prompts(user, organization.id);
+    const nextCount = activePromptCount + additional_prompt_count;
+
+    if (nextCount <= organization.tracked_prompts_daily_limit) {
+      return;
+    }
+
+    throw new ValidationError(
+      `The ${organization.plan_type} plan supports up to ${organization.tracked_prompts_daily_limit} tracked prompts in the workspace.`,
+      {
+        organization_id: organization.id,
+        plan_type: organization.plan_type,
+        tracked_prompt_limit: organization.tracked_prompts_daily_limit,
+        tracked_prompts_in_use: activePromptCount,
+        requested_additional_prompts: additional_prompt_count,
+      },
+    );
+  }
+
+  private async count_active_workspace_prompts(
+    user: AccessActor,
+    organization_id: string,
+  ): Promise<number> {
+    const projects = await this.project_service.list_projects(user, {
+      organization_id,
+    });
+    const promptLists = await Promise.all(
+      projects.map((project) =>
+        this.prompt_library_client.list_project_prompts(project.id, {
+          is_active: true,
+        }),
+      ),
+    );
+
+    return promptLists.reduce((total, prompts) => total + prompts.length, 0);
+  }
+
   private async bootstrap_competitor_crawls(project_id: string): Promise<SetupProjectResult["warnings"]> {
     return this.bootstrap_source_intelligence_targets(project_id, "competitors");
   }
@@ -726,6 +899,54 @@ export class OrchestrationService {
     }
 
     return warnings;
+  }
+
+  private async generate_prompts_for_active_project(
+    user: AccessActor,
+    project: Project,
+    payload: PromptGenerationPayload = {},
+  ): Promise<{
+    attempted: boolean;
+    succeeded: boolean;
+    result: PromptGenerationResult | null;
+    warnings: SetupProjectResult["warnings"];
+  }> {
+    const { organization } = await this.project_service.assert_organization_access(
+      user,
+      project.organization_id,
+    );
+    const warnings: SetupProjectResult["warnings"] = [];
+
+    try {
+      this.entitlement_service.assert_compute_access(organization, "prompt_generation");
+      const result = await this.prompt_library_client.generate_project_prompts(
+        project.id,
+        build_prompt_generation_payload(payload),
+      );
+
+      return {
+        attempted: true,
+        succeeded: true,
+        result,
+        warnings,
+      };
+    } catch (error) {
+      warnings.push(
+        to_service_warning(
+          "prompt_library",
+          error,
+          "prompt_generation_failed",
+          "Project activated but automatic prompt generation failed",
+        ),
+      );
+
+      return {
+        attempted: true,
+        succeeded: false,
+        result: null,
+        warnings,
+      };
+    }
   }
 }
 
@@ -789,24 +1010,9 @@ function normalize_suggested_competitors(
 }
 
 function build_prompt_generation_payload(
-  project: Project,
-  competitors: ProjectCompetitor[],
   payload: PromptGenerationPayload = {},
 ): PromptGenerationPayload {
   return {
-    category: payload.category ?? project.primary_category,
-    competitors:
-      payload.competitors ??
-      competitors.map((competitor) => competitor.competitor_name),
-    personas: payload.personas,
-    use_cases: payload.use_cases,
-    features: payload.features,
-    integrations: payload.integrations,
-    industries: payload.industries,
-    comparison_topics: payload.comparison_topics,
-    faq_questions: payload.faq_questions,
-    region: payload.region ?? project.target_region,
-    language: payload.language ?? project.target_language,
     metadata_json: payload.metadata_json,
   };
 }

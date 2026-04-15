@@ -1,6 +1,14 @@
 import { build_app } from "../../src/app";
 import { read_env } from "../../src/config/env";
-import { AuthenticatedUser, Organization, Project, PromptRecord, RunProgress, RunType } from "../../src/domain/core";
+import {
+  AuthenticatedUser,
+  Organization,
+  Project,
+  PromptLibraryItem,
+  PromptRecord,
+  RunProgress,
+  RunType,
+} from "../../src/domain/core";
 import { DashboardService } from "../../src/services/dashboard-service";
 import { AdminRunService } from "../../src/services/admin-run-service";
 import { DailyRunnerAdminService } from "../../src/services/daily-runner-admin-service";
@@ -76,6 +84,7 @@ export function create_test_context() {
     project_service,
     prompt_runner_client,
     dashboard_layer_client,
+    reconciler_client,
   );
   const orchestration_service = new OrchestrationService(
     project_service,
@@ -232,6 +241,9 @@ export function create_test_context() {
     },
     seed_prompt_set(project_id: string, run_type: RunType, prompt_ids: string[]): void {
       prompt_library_client.set_prompt_set(project_id, run_type, prompt_ids);
+    },
+    seed_prompt_library(project_id: string, items: PromptLibraryItem[]): void {
+      prompt_library_client.set_prompt_library_items(project_id, items);
     },
     set_run_progress(run_batch_id: string, progress: RunProgress): void {
       prompt_runner_client.set_run_progress(run_batch_id, progress);

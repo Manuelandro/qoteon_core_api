@@ -92,11 +92,6 @@ export async function register_internal_workflow_routes(
     return reply.code(result.response_status_code).send(result.response_body);
   });
 
-  app.get("/projects/:project_id/daily-runner/prompt-context", async (request) => {
-    const params = parse_schema(project_params_schema, request.params);
-    return services.orchestration_service.get_project_prompt_context(INTERNAL_ACTOR, params.project_id);
-  });
-
   app.post("/projects/:project_id/daily-runner/prompts/regenerate", async (request, reply) => {
     const params = parse_schema(project_params_schema, request.params);
     const body = parse_schema(

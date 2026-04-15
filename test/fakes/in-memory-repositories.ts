@@ -47,6 +47,7 @@ export class InMemoryUserRepository implements UserRepository {
 
 export class InMemoryOrganizationRepository implements OrganizationRepository {
   private readonly organizations = new Map<string, Organization>();
+  private readonly organizations_by_slug = new Map<string, Organization>();
   private readonly memberships = new Map<string, OrganizationUser>();
   private organization_counter = 0;
   private membership_counter = 0;
@@ -72,6 +73,15 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
     stripe_customer_id?: string | null;
     stripe_subscription_id?: string | null;
   }): Promise<Organization> {
+    const existing = this.organizations_by_slug.get(input.slug);
+
+    if (existing) {
+      throw new ConflictError("Unable to create organization", {
+        database_code: "23505",
+        database_details: `Key (slug)=(${input.slug}) already exists.`,
+      });
+    }
+
     const organization: Organization = {
       id: `org-${++this.organization_counter}`,
       name: input.name,
@@ -98,11 +108,16 @@ export class InMemoryOrganizationRepository implements OrganizationRepository {
     };
 
     this.organizations.set(organization.id, organization);
+    this.organizations_by_slug.set(organization.slug, organization);
     return organization;
   }
 
   async get_organization_by_id(organization_id: string): Promise<Organization | null> {
     return this.organizations.get(organization_id) ?? null;
+  }
+
+  async get_organization_by_slug(slug: string): Promise<Organization | null> {
+    return this.organizations_by_slug.get(slug) ?? null;
   }
 
   async list_all_organizations(): Promise<Organization[]> {

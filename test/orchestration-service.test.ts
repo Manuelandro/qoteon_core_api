@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 
 import { create_test_context } from "./helpers/test-context";
 
-test("setup_project defers prompt generation until source intelligence is ready", async () => {
+test("setup_project bootstraps crawl work and generates prompts immediately for active projects", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
-  context.clients.prompt_library_client.fail_generate = new Error("prompt library down");
 
   const result = await context.services.orchestration_service.setup_project("user-1", {
     organization_id: organization.id,
@@ -23,19 +22,14 @@ test("setup_project defers prompt generation until source intelligence is ready"
         competitor_domain: "competitor.example",
       },
     ],
-    generate_initial_prompts: true,
-    prompt_generation_payload: {
-      personas: ["marketing lead"],
-      use_cases: ["brand monitoring"],
-    },
   });
 
   assert.equal(result.status, "success");
   assert.equal(result.project.name, "Acme Project");
   assert.equal(result.competitors.length, 1);
-  assert.equal(result.prompt_generation.attempted, false);
-  assert.equal(result.prompt_generation.succeeded, false);
-  assert.equal(result.prompt_generation.result, null);
+  assert.equal(result.prompt_generation.attempted, true);
+  assert.equal(result.prompt_generation.succeeded, true);
+  assert.ok(result.prompt_generation.result?.generated_count);
   assert.equal(result.warnings.length, 0);
   assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
@@ -100,59 +94,12 @@ test("update_project bootstraps source intelligence when a draft project becomes
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
 });
 
-test("regenerate_project_prompts throws when source intelligence is not ready", async () => {
+test("regenerate_project_prompts no longer requires source intelligence readiness", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
   const project = await context.seed_project("user-1", organization.id);
 
-  await assert.rejects(
-    () =>
-      context.services.orchestration_service.regenerate_project_prompts("user-1", project.id, {
-        category: "SaaS",
-      }),
-    {
-      name: "ConflictError",
-      code: "conflict",
-    },
-  );
-});
-
-test("regenerate_project_prompts succeeds after source intelligence is ready", async () => {
-  const context = create_test_context();
-  const organization = await context.seed_organization("user-1");
-  const project = await context.seed_project("user-1", organization.id);
-  context.clients.source_intelligence_client.prompt_context_by_project.set(project.id, {
-    project_id: project.id,
-    last_successful_crawl_at: "2026-04-10T12:00:00.000Z",
-    is_ready_for_prompt_generation: true,
-    prompt_generation_blockers: [],
-    client_website_crawl_status: "passed",
-    client_website_crawl_message: null,
-    client_website_crawl_attempts_made: 1,
-    client_website_crawl_max_attempts: 5,
-    crawl_coverage: {
-      active_target_count: 1,
-      total_targets: 1,
-      completed_run_count: 1,
-      successful_target_count: 1,
-      total_pages: 8,
-      client_pages: 5,
-      competitor_pages: 3,
-      page_types: {},
-    },
-    suggested_personas: [],
-    suggested_use_cases: [],
-    suggested_features: [],
-    suggested_integrations: [],
-    suggested_industries: ["SaaS"],
-    suggested_comparison_topics: [],
-    suggested_faq_questions: [],
-    competitor_signal_groups: [],
-  });
-
-  const result = await context.services.orchestration_service.regenerate_project_prompts("user-1", project.id, {
-    category: "SaaS",
-  });
+  const result = await context.services.orchestration_service.regenerate_project_prompts("user-1", project.id, {});
 
   assert.ok(result.generated_count > 0);
 });
@@ -195,9 +142,193 @@ test("launch_baseline_scan creates a run batch from the baseline prompt set", as
   assert.equal(result.prompt_set.prompt_count, 2);
   assert.equal(result.run_batch.run_type, "baseline");
   assert.equal(result.run_batch.execution_count, 4);
-  assert.equal(
-    result.run_batch.prompt_ids[0],
-    context.clients.prompt_runner_client.synced_prompts.get("prompt-1"),
+  assert.equal(result.run_batch.prompt_ids[0], "prompt-1");
+});
+
+test("update_prompt proxies prompt text changes through Prompt Library", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      body: "Original prompt",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+
+  const prompt = await context.services.orchestration_service.update_prompt(
+    "user-1",
+    project.id,
+    "prompt-1",
+    "Updated prompt text",
+  );
+
+  assert.equal(prompt.body, "Updated prompt text");
+});
+
+test("delete_prompt archives the prompt through Prompt Library", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      body: "Prompt body",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+
+  const prompt = await context.services.orchestration_service.delete_prompt(
+    "user-1",
+    project.id,
+    "prompt-1",
+  );
+
+  assert.equal(prompt.status, "archived");
+  assert.equal(prompt.is_active, false);
+  assert.ok(prompt.archived_at);
+});
+
+test("import_prompt_library_item is blocked when tracked prompt capacity is exhausted", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(
+    project.id,
+    Array.from({ length: 5 }, (_, index) => ({
+      id: `prompt-${index + 1}`,
+      project_id: project.id,
+      title: `Prompt ${index + 1}`,
+      body: `Prompt body ${index + 1}`,
+      status: "ready" as const,
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    })),
+  );
+  context.seed_prompt_library(project.id, [
+    {
+      id: "prompt-library-1",
+      prompt_text: "Best AI visibility tools for enterprise teams",
+      cluster_name: "market_discovery",
+      intent_type: "commercial_discovery",
+      language: "en",
+      region: null,
+      source_type: "llm_generated",
+      is_active: true,
+      metadata_json: {},
+      imported_project_prompt_id: null,
+      is_imported: false,
+    },
+  ]);
+
+  await assert.rejects(
+    () =>
+      context.services.orchestration_service.import_prompt_library_item(
+        "user-1",
+        project.id,
+        "prompt-library-1",
+      ),
+    {
+      name: "ValidationError",
+      message: "The trial plan supports up to 5 tracked prompts in the workspace.",
+    },
+  );
+});
+
+test("activate_prompt is blocked when tracked prompt capacity is exhausted", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      body: "Prompt 1",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+    {
+      id: "prompt-2",
+      project_id: project.id,
+      title: "Prompt 2",
+      body: "Prompt 2",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+    {
+      id: "prompt-3",
+      project_id: project.id,
+      title: "Prompt 3",
+      body: "Prompt 3",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+    {
+      id: "prompt-4",
+      project_id: project.id,
+      title: "Prompt 4",
+      body: "Prompt 4",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+    {
+      id: "prompt-5",
+      project_id: project.id,
+      title: "Prompt 5",
+      body: "Prompt 5",
+      status: "ready",
+      is_active: false,
+      cluster: "brand",
+      intent: "awareness",
+    },
+    {
+      id: "prompt-6",
+      project_id: project.id,
+      title: "Prompt 6",
+      body: "Prompt 6",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+
+  await assert.rejects(
+    () =>
+      context.services.orchestration_service.activate_prompt(
+        "user-1",
+        project.id,
+        "prompt-5",
+      ),
+    {
+      name: "ValidationError",
+      message: "The trial plan supports up to 5 tracked prompts in the workspace.",
+    },
   );
 });
 
@@ -297,6 +428,70 @@ test("prepare_automatic_initial_baseline_run skips when a baseline already exist
 
   assert.equal(plan.response.reason, "baseline_already_exists");
   assert.ok(plan.response.run_batch_id);
+});
+
+test("prepare_automatic_initial_baseline_run relaunches when the latest baseline used an outdated prompt set", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+    {
+      id: "prompt-2",
+      project_id: project.id,
+      title: "Prompt 2",
+      status: "ready",
+      is_active: true,
+      cluster: "comparison",
+      intent: "comparison",
+    },
+  ]);
+  context.seed_prompt_set(project.id, "baseline", ["prompt-1"]);
+  await context.services.orchestration_service.launch_baseline_scan("user-1", project.id, [
+    "gpt-5.4",
+  ]);
+  context.seed_prompt_set(project.id, "baseline", ["prompt-2"]);
+
+  const plan = await context.services.orchestration_service.prepare_automatic_initial_baseline_run(
+    project.id,
+  );
+
+  assert.equal(plan.triggered, true);
+
+  if (!plan.triggered) {
+    throw new Error("Expected the automatic baseline plan to trigger for an outdated baseline");
+  }
+
+  assert.equal(plan.prompt_count, 1);
+});
+
+test("prepare_automatic_initial_baseline_run returns a non-triggered result when no baseline prompts exist", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+
+  const plan = await context.services.orchestration_service.prepare_automatic_initial_baseline_run(
+    project.id,
+  );
+
+  assert.equal(plan.triggered, false);
+
+  if (plan.triggered) {
+    throw new Error("Expected the automatic baseline plan not to trigger");
+  }
+
+  assert.equal(plan.response.reason, "no_prompts_available");
+  assert.equal(plan.response.prompt_count, 0);
+  assert.equal(plan.response.run_batch_id, null);
 });
 
 test("project creation is blocked when the organization reaches the domain limit", async () => {

@@ -6,7 +6,9 @@ import { parse_schema } from "../lib/validation";
 import {
   launch_run_request_schema,
   prompt_generation_request_schema,
+  prompt_library_query_schema,
   source_intelligence_crawl_request_schema,
+  update_prompt_request_schema,
 } from "../schemas/workflow-schemas";
 import {
   list_executions_query_schema,
@@ -103,6 +105,60 @@ export async function register_workflow_routes(
       request.current_user,
       params.project_id,
       params.prompt_id,
+    );
+  });
+
+  app.patch("/projects/:project_id/prompts/:prompt_id", async (request) => {
+    const params = parse_schema(prompt_params_schema, request.params);
+    const body = parse_schema(update_prompt_request_schema, request.body);
+
+    return services.orchestration_service.update_prompt(
+      request.current_user,
+      params.project_id,
+      params.prompt_id,
+      body.prompt_text,
+    );
+  });
+
+  app.delete("/projects/:project_id/prompts/:prompt_id", async (request) => {
+    const params = parse_schema(prompt_params_schema, request.params);
+
+    return services.orchestration_service.delete_prompt(
+      request.current_user,
+      params.project_id,
+      params.prompt_id,
+    );
+  });
+
+  app.get("/projects/:project_id/prompt-library", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+    const query = parse_schema(prompt_library_query_schema, request.query);
+
+    return {
+      items: await services.orchestration_service.list_prompt_library(
+        request.current_user,
+        params.project_id,
+        query,
+      ),
+    };
+  });
+
+  app.post("/projects/:project_id/prompt-library/:prompt_id/import", async (request) => {
+    const params = parse_schema(prompt_params_schema, request.params);
+
+    return services.orchestration_service.import_prompt_library_item(
+      request.current_user,
+      params.project_id,
+      params.prompt_id,
+    );
+  });
+
+  app.get("/projects/:project_id/prompt-capacity", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+
+    return services.orchestration_service.get_prompt_capacity_summary(
+      request.current_user,
+      params.project_id,
     );
   });
 

@@ -13,16 +13,24 @@ Implemented:
 - plan catalog, trial state, retention settings, and usage counters
 - project and competitor CRUD
 - draft-to-active onboarding flow
+- idempotent organization creation for duplicate onboarding requests that reuse the same slug for the same user
 - competitor prefills through Prompt Runner during onboarding
 - crawl orchestration through Source Intelligence
 - prompt generation and prompt-state orchestration through Prompt Library
+- prompt edit, archive, project-generated prompt-pool activation, and tracked-capacity summary through Prompt Library orchestration
+- automatic prompt generation when a project becomes active, without waiting for crawl-derived prompt context
 - baseline and `daily_tracking` launch orchestration through Prompt Runner
 - dashboard proxy routes through Dashboard Layer
+- Reconciler-backed `GET /projects/:project_id/onboarding-progress` mapping for the owner frontend onboarding-completion modal
+- prompt-level visibility analytics proxied from Dashboard Layer
 - admin proxy routes for Daily Runner and Reconciler
 - Core-shaped admin launch list routes for baseline-oriented and established projects
 - per-user and per-project concurrency guards on hot workflow routes
 - idempotency support for run launch and crawl trigger flows
 - route-aware admission control and backpressure for public write routes
+- CORS allowlist handling for direct browser polling from the owner frontend
+- non-fatal internal automation response when the initial baseline handoff arrives before any baseline prompts exist yet
+- automatic initial baseline planning that ignores stale baseline batches when Prompt Library has already produced a newer baseline prompt set
 
 Deferred:
 
@@ -34,13 +42,14 @@ Deferred:
 - organizations and organization membership
 - projects and competitors
 - plan entitlements and usage counters
+- tracked prompt capacity guards on prompt import and activation
 - public orchestration entry points
 - admin access model
 
 Core does not own:
 
 - crawl tables
-- prompt templates
+- prompt generation internals
 - prompt execution rows
 - parse artifacts
 - dashboard materializations
@@ -68,19 +77,24 @@ Core does not own:
 ### Onboarding
 
 1. create or reuse a draft organization and project
+   Duplicate organization create attempts from the same onboarding session now resolve to the already-created organization instead of surfacing a slug conflict.
 2. ask Prompt Runner for competitor suggestions
 3. persist the selected competitors in Core
 4. activate the project only after onboarding confirmation
-5. bootstrap crawl work only after the project becomes `active`
+5. once the project becomes `active`, bootstrap crawl work in Source Intelligence and request prompt generation from Prompt Library in parallel
+6. the frontend should redirect immediately into the restricted dashboard and poll Core for onboarding completion while the same automatic pipeline continues in the background
+7. Core should only report onboarding `completed` once dashboard data is actually renderable, using the Reconciler-backed dashboard-ready signal instead of a looser upstream run state
 
 ### Prompt and run orchestration
 
 1. request prompt generation from Prompt Library
-2. request prompt-set selection from Prompt Library
-3. sync prompts into Prompt Runner
-4. enforce quotas and concurrency guards
-5. create the run batch in Prompt Runner
-6. proxy progress and result reads back to the frontend
+2. proxy prompt edit, archive, project-generated prompt-pool activation, and prompt-capacity summary
+3. enforce active tracked-prompt capacity on prompt import and activation
+4. request prompt-set selection from Prompt Library
+5. sync prompts into Prompt Runner
+6. enforce daily metered usage and concurrency guards before run launch
+7. create the run batch in Prompt Runner
+8. proxy progress and result reads back to the frontend
 
 ### Automation and recovery
 
@@ -90,6 +104,10 @@ Core also exposes private routes used by:
 - `qoteon_reconciler`
 
 This keeps quota enforcement and run-launch semantics centralized in Core.
+
+For automatic initial baseline launches, Core now returns a non-triggered `200` result with reason `no_prompts_available` when Prompt Library has not produced any baseline prompts yet. That prevents downstream retry loops for a state that is not recoverable by retry alone.
+
+Core also only treats an existing baseline as reusable when it matches the current Prompt Library baseline prompt set. If prompts were regenerated and the previous baseline batch is now stale, the next automatic or reconciler-driven baseline launch can create a fresh run from the current tracked baseline prompts instead of being blocked by the old batch row.
 
 The admin launch pages are also shaped here:
 
@@ -130,9 +148,14 @@ All routes except `GET /health` require auth.
 
 - `POST /projects/:project_id/prompts/generate`
 - `GET /projects/:project_id/prompts`
+- `PATCH /projects/:project_id/prompts/:prompt_id`
+- `DELETE /projects/:project_id/prompts/:prompt_id`
 - `GET /projects/:project_id/prompt-sets/:run_type`
 - `POST /projects/:project_id/prompts/:prompt_id/activate`
 - `POST /projects/:project_id/prompts/:prompt_id/deactivate`
+- `GET /projects/:project_id/prompt-library`
+- `POST /projects/:project_id/prompt-library/:prompt_id/import`
+- `GET /projects/:project_id/prompt-capacity`
 
 ### Run and crawl routes
 
@@ -152,12 +175,57 @@ All routes except `GET /health` require auth.
 
 - `GET /dashboard/projects`
 - `GET /projects/:project_id/overview`
+- `GET /projects/:project_id/onboarding-progress`
 - `GET /projects/:project_id/visibility/summary`
 - `GET /projects/:project_id/visibility/models`
 - `GET /projects/:project_id/visibility/clusters`
 - `GET /projects/:project_id/visibility/competitors`
+- `GET /projects/:project_id/visibility/prompts`
 - `GET /projects/:project_id/visibility/trends`
 - `GET /run-batches/:run_batch_id/results`
+
+### Onboarding progress contract
+
+`GET /projects/:project_id/onboarding-progress` is the browser-polled contract used by `qoteon_frontend` after onboarding confirmation.
+
+The response is shaped for UI consumption:
+
+- `status`
+  one of `initializing`, `crawling_page`, `generating_prompts`, `running_baseline`, `completed`
+- `progressPercent`
+  stable UI progress values of `15`, `40`, `65`, `90`, or `100`
+- `message`
+  the user-facing stage label used in the dashboard modal
+- `dashboardReady`
+  `true` only when Reconciler can confirm that dashboard data is renderable now
+- `isTerminal`
+  `true` for `completed` and for blocked states where the frontend should stop trapping the user behind the modal
+- `backendStateCode` and `backendStateMessage`
+  the current Reconciler-derived backend classification for debugging and concise fallback UI
+
+Current mapping:
+
+- `project_created_no_crawl` and phase `project` -> `initializing`
+- `crawl_*` states and crawl or prompt-context phases -> `crawling_page`
+- `prompt_generation_*` states and phase `prompt_generation` -> `generating_prompts`
+- baseline, dashboard-materialization gap, `healthy`, and later daily-adjacent recovery states before `dashboardReady` -> `running_baseline`
+- `completed` only when Reconciler reports dashboard-ready data, currently through `dashboardSummary.hasData`
+
+## Prompt quota semantics
+
+Core now enforces two related prompt limits:
+
+- active tracked prompt capacity
+  Checked when a generated project prompt is moved from the prompt library pool into tracking or reactivated for tracking. Deleting or deactivating a prompt frees this capacity immediately.
+- daily tracked prompt usage
+  Reserved when a `daily_tracking` run is launched. If run creation fails, the reservation is released.
+
+For the current plan catalog, both numbers use the same product-facing cap:
+
+- Trial: `5`
+- Starter: `20`
+- Growth: `50`
+- Enterprise: `150`
 
 ### Admin routes
 
@@ -196,7 +264,6 @@ Daily Runner proxy:
 - `POST /internal/projects/:project_id/runs/baseline`
 - `POST /internal/projects/:project_id/runs/daily-tracking`
 - `POST /internal/projects/:project_id/daily-runner/crawl-refresh`
-- `GET /internal/projects/:project_id/daily-runner/prompt-context`
 - `POST /internal/projects/:project_id/daily-runner/prompts/regenerate`
 - `POST /internal/projects/:project_id/daily-runner/runs/daily-tracking`
 - `GET /internal/daily-runner/run-batches/:run_batch_id/progress`
@@ -235,9 +302,17 @@ npm run start
 Important variables:
 
 - `DATABASE_URL`
+- `DATABASE_SSL_MODE`
 - `INTERNAL_AUTH_TOKEN`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY` or the configured auth verification values
 - downstream base URLs and auth tokens for Source Intelligence, Prompt Library, Prompt Runner, Dashboard Layer, Daily Runner, and Reconciler
+- `CORE_CORS_ALLOWED_ORIGINS`
+
+Notes:
+
+- keep `DATABASE_SSL_MODE=disable` for local Postgres
+- Core talks to downstream services over internal bearer tokens
+- `CORE_CORS_ALLOWED_ORIGINS` is a comma-separated browser allowlist for direct frontend polling; keep local frontend origins here and add the deployed owner-frontend origin in production
 
 See [`.env.example`](./.env.example) for the current local and production defaults.

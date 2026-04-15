@@ -158,6 +158,7 @@ export function create_app_services(
     project_service,
     prompt_runner_client,
     dashboard_layer_client,
+    reconciler_client,
   );
   const orchestration_service = new OrchestrationService(
     project_service,

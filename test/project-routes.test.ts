@@ -30,6 +30,56 @@ test("organization creation defaults self-serve accounts to trial", async (t) =>
   assert.ok(organization.trial_expires_at);
 });
 
+test("organization creation is idempotent for duplicate slug requests from the same user", async (t) => {
+  const context = create_test_context();
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const first_response = await app.inject({
+    method: "POST",
+    url: "/organizations",
+    headers: {
+      "x-user-id": "user-1",
+      "x-user-email": "owner@example.com",
+    },
+    payload: {
+      name: "Bioceutica Milano",
+      slug: "bioceuticamilano-com-415d5a28",
+    },
+  });
+
+  const second_response = await app.inject({
+    method: "POST",
+    url: "/organizations",
+    headers: {
+      "x-user-id": "user-1",
+      "x-user-email": "owner@example.com",
+    },
+    payload: {
+      name: "Bioceutica Milano",
+      slug: "bioceuticamilano-com-415d5a28",
+    },
+  });
+
+  assert.equal(first_response.statusCode, 201);
+  assert.equal(second_response.statusCode, 201);
+  assert.equal(second_response.json().id, first_response.json().id);
+
+  const organizations_response = await app.inject({
+    method: "GET",
+    url: "/organizations",
+    headers: {
+      "x-user-id": "user-1",
+      "x-user-email": "owner@example.com",
+    },
+  });
+
+  assert.equal(organizations_response.statusCode, 200);
+  assert.equal(organizations_response.json().organizations.length, 1);
+});
+
 test("project creation route creates project, competitors, and defers prompt generation", async (t) => {
   const context = create_test_context();
   const app = await context.build_app();
@@ -75,11 +125,6 @@ test("project creation route creates project, competitors, and defers prompt gen
           competitor_domain: "other.example",
         },
       ],
-      generate_initial_prompts: true,
-      prompt_generation_payload: {
-        personas: ["marketing lead"],
-        use_cases: ["brand monitoring"],
-      },
     },
   });
 
@@ -88,9 +133,9 @@ test("project creation route creates project, competitors, and defers prompt gen
   assert.equal(payload.status, "success");
   assert.equal(payload.project.organization_id, organization.id);
   assert.equal(payload.competitors.length, 1);
-  assert.equal(payload.prompt_generation.attempted, false);
-  assert.equal(payload.prompt_generation.succeeded, false);
-  assert.equal(payload.prompt_generation.result, null);
+  assert.equal(payload.prompt_generation.attempted, true);
+  assert.equal(payload.prompt_generation.succeeded, true);
+  assert.ok(payload.prompt_generation.result.generated_count > 0);
   assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
 });
@@ -558,7 +603,7 @@ test("source intelligence routes proxy manual crawl triggers and prompt-context 
   assert.equal(promptContextResponse.json().suggested_personas[0], "Marketing Teams");
 });
 
-test("prompt generation route returns conflict until source intelligence is ready", async (t) => {
+test("prompt generation route no longer depends on source intelligence readiness", async (t) => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
   const project = await context.seed_project("user-1", organization.id);
@@ -573,13 +618,180 @@ test("prompt generation route returns conflict until source intelligence is read
     headers: {
       "x-user-id": "user-1",
     },
+    payload: {},
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.ok(response.json().generated_count > 0);
+});
+
+test("prompt update route proxies text edits through Core", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      body: "Original prompt",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "PATCH",
+    url: `/projects/${project.id}/prompts/prompt-1`,
+    headers: {
+      "x-user-id": "user-1",
+    },
     payload: {
-      category: "SaaS",
+      prompt_text: "Updated prompt body",
     },
   });
 
-  assert.equal(response.statusCode, 409);
-  assert.equal(response.json().error.code, "conflict");
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().body, "Updated prompt body");
+});
+
+test("prompt delete route archives prompts through Core", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      body: "Prompt body",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "DELETE",
+    url: `/projects/${project.id}/prompts/prompt-1`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().status, "archived");
+  assert.ok(response.json().archived_at);
+});
+
+test("prompt library import route respects prompt capacity", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+  context.seed_prompts(
+    project.id,
+    Array.from({ length: 5 }, (_, index) => ({
+      id: `prompt-${index + 1}`,
+      project_id: project.id,
+      title: `Prompt ${index + 1}`,
+      body: `Prompt body ${index + 1}`,
+      status: "ready" as const,
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    })),
+  );
+  context.seed_prompt_library(project.id, [
+    {
+      id: "prompt-library-1",
+      prompt_text: "Best AI visibility tools for enterprise teams",
+      cluster_name: "market_discovery",
+      intent_type: "commercial_discovery",
+      language: "en",
+      region: null,
+      source_type: "llm_generated",
+      is_active: true,
+      metadata_json: {},
+      imported_project_prompt_id: null,
+      is_imported: false,
+    },
+  ]);
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: `/projects/${project.id}/prompt-library/prompt-library-1/import`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+  });
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.json().error.code, "validation_error");
+});
+
+test("prompt capacity route returns tracked prompt usage and remaining capacity", async (t) => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "starter");
+  const project = await context.seed_project("user-1", organization.id);
+  context.seed_prompts(project.id, [
+    {
+      id: "prompt-1",
+      project_id: project.id,
+      title: "Prompt 1",
+      status: "ready",
+      is_active: true,
+      cluster: "brand",
+      intent: "awareness",
+    },
+    {
+      id: "prompt-2",
+      project_id: project.id,
+      title: "Prompt 2",
+      status: "ready",
+      is_active: false,
+      cluster: "brand",
+      intent: "awareness",
+    },
+  ]);
+  await context.repositories.organization_usage_repository.consume_usage(
+    organization.id,
+    "tracked_prompts_daily",
+    `tracked_prompts_daily:${new Date().toISOString().slice(0, 10)}`,
+    4,
+    organization.tracked_prompts_daily_limit,
+  );
+  const app = await context.build_app();
+  t.after(async () => {
+    await app.close();
+  });
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/projects/${project.id}/prompt-capacity`,
+    headers: {
+      "x-user-id": "user-1",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().tracked_prompt_limit, 20);
+  assert.equal(response.json().tracked_prompts_in_use, 1);
+  assert.equal(response.json().daily_tracked_prompts_used, 4);
 });
 
 test("run launch replays the same response when idempotency key is reused", async (t) => {

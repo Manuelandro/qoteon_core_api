@@ -1,4 +1,4 @@
-import Fastify, { FastifyInstance } from "fastify";
+import Fastify, { FastifyInstance, FastifyReply } from "fastify";
 
 import { read_env, Env } from "./config/env";
 import { AppError, UnauthorizedError } from "./errors/app-error";
@@ -33,6 +33,7 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
   });
   const runtime = options.services ? null : create_app_runtime(env, app.log);
   const services = options.services ?? runtime!.services;
+  const cors_allowed_origins = new Set(env.CORE_CORS_ALLOWED_ORIGINS);
   const public_edge_guard = new PublicEdgeGuard({
     rate_limit_window_ms: env.CORE_RATE_LIMIT_WINDOW_MS,
     rate_limit_default_max: env.CORE_RATE_LIMIT_DEFAULT_MAX,
@@ -82,6 +83,21 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
   });
 
   void register_health_routes(app);
+
+  app.addHook("onRequest", async (request, reply) => {
+    const origin = request.headers.origin;
+    const requested_method = request.headers["access-control-request-method"];
+
+    if (!origin || !cors_allowed_origins.has(origin)) {
+      return;
+    }
+
+    apply_cors_headers(reply, origin);
+
+    if (request.method === "OPTIONS" && requested_method) {
+      return reply.status(204).send();
+    }
+  });
 
   app.register(async (internal_app) => {
     internal_app.addHook("preHandler", async (request) => {
@@ -156,4 +172,15 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
   });
 
   return app;
+}
+
+function apply_cors_headers(reply: FastifyReply, origin: string) {
+  reply.header("access-control-allow-origin", origin);
+  reply.header("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  reply.header(
+    "access-control-allow-headers",
+    "authorization,content-type,x-user-id,x-user-email,x-user-name,x-user-role",
+  );
+  reply.header("access-control-max-age", "86400");
+  reply.header("vary", "Origin");
 }

@@ -12,6 +12,13 @@ export const RUN_TYPES = ["baseline", "daily_tracking"] as const;
 export const DASHBOARD_RUN_TYPES = ["baseline", "daily_tracking", "experiment", "custom"] as const;
 export const DASHBOARD_TREND_DIRECTIONS = ["up", "down", "flat", "unavailable"] as const;
 export const DASHBOARD_HEALTH_FLAG_SEVERITIES = ["info", "warning", "critical"] as const;
+export const PROJECT_ONBOARDING_UI_STATUSES = [
+  "initializing",
+  "generating_prompts",
+  "crawling_page",
+  "running_baseline",
+  "completed",
+] as const;
 
 export type PlanType = (typeof PLAN_TYPES)[number];
 export type OrganizationBillingStatus = (typeof ORGANIZATION_BILLING_STATUSES)[number];
@@ -22,6 +29,7 @@ export type RunType = (typeof RUN_TYPES)[number];
 export type DashboardRunType = (typeof DASHBOARD_RUN_TYPES)[number];
 export type DashboardTrendDirection = (typeof DASHBOARD_TREND_DIRECTIONS)[number];
 export type DashboardHealthFlagSeverity = (typeof DASHBOARD_HEALTH_FLAG_SEVERITIES)[number];
+export type ProjectOnboardingUiStatus = (typeof PROJECT_ONBOARDING_UI_STATUSES)[number];
 export type MeteredQuotaKey =
   | "tracked_prompts_daily"
   | "llm_responses"
@@ -318,6 +326,21 @@ export interface DashboardCompetitorComparisonRow {
   dominantClusters: string[];
 }
 
+export interface DashboardPromptVisibilityRow {
+  promptId: string;
+  promptText: string;
+  clusterName: string;
+  intentType: string;
+  sourceType: string;
+  isActive: boolean;
+  totalCompletedExecutions: number;
+  executionsWithBrandMention: number;
+  visibilityPercent: number | null;
+  lastRunAt: string | null;
+  lastRunBatchId: string | null;
+  lastRunType: DashboardRunType | null;
+}
+
 export interface DashboardTimeSeriesPoint {
   runBatchId: string | null;
   runType: DashboardRunType | null;
@@ -419,6 +442,12 @@ export interface DashboardCompetitorBreakdown {
   };
 }
 
+export interface DashboardPromptBreakdown {
+  projectId: string;
+  items: DashboardPromptVisibilityRow[];
+  summary: DashboardComparisonMetadata;
+}
+
 export interface DashboardTrends {
   projectId: string;
   metrics: {
@@ -444,18 +473,19 @@ export interface DashboardRunResults {
   competitorSummary: DashboardCompetitorComparisonRow[];
 }
 
+export interface ProjectOnboardingProgressResponse {
+  projectId: string;
+  status: ProjectOnboardingUiStatus;
+  progressPercent: number;
+  message: string;
+  isTerminal: boolean;
+  dashboardReady: boolean;
+  pollAfterMs: number;
+  backendStateCode: string | null;
+  backendStateMessage: string | null;
+}
+
 export interface PromptGenerationPayload {
-  category?: string;
-  competitors?: string[];
-  personas?: string[];
-  use_cases?: string[];
-  features?: string[];
-  integrations?: string[];
-  industries?: string[];
-  comparison_topics?: string[];
-  faq_questions?: string[];
-  region?: string[];
-  language?: string;
   metadata_json?: Record<string, unknown>;
 }
 
@@ -484,6 +514,34 @@ export interface PromptRecord {
   metadata_json?: Record<string, unknown> | null;
   created_at?: string;
   updated_at?: string;
+  archived_at?: string | null;
+}
+
+export interface PromptLibraryItem {
+  id: string;
+  prompt_text: string;
+  cluster_name: string;
+  intent_type: string;
+  language: string;
+  region: string[] | null;
+  source_type: string;
+  is_active: boolean;
+  metadata_json: Record<string, unknown> | null;
+  imported_project_prompt_id: string | null;
+  is_imported: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PromptCapacitySummary {
+  project_id: string;
+  organization_id: string;
+  tracked_prompt_limit: number;
+  tracked_prompts_in_use: number;
+  tracked_prompts_remaining: number;
+  active_project_prompt_count: number;
+  daily_tracked_prompts_used: number;
+  daily_tracked_prompts_remaining: number;
 }
 
 export interface PromptSyncRecord {
@@ -580,7 +638,7 @@ export interface PromptRunnerCompetitorSuggestion {
 export interface AutomaticInitialBaselineRunResult {
   project_id: string;
   triggered: boolean;
-  reason: "baseline_already_exists" | "no_active_ai_models" | null;
+  reason: "baseline_already_exists" | "no_active_ai_models" | "no_prompts_available" | null;
   run_batch_id: string | null;
   run_status: string | null;
   ai_model_ids: string[];

@@ -4,23 +4,11 @@ import {
   competitor_schema,
   json_record_schema,
   project_schema,
-  region_array_schema,
   run_type_schema,
   service_warning_schema,
 } from "./common";
 
 export const prompt_generation_request_schema = z.object({
-  category: z.string().min(1).optional(),
-  competitors: z.array(z.string().min(1)).optional(),
-  personas: z.array(z.string().min(1)).optional(),
-  use_cases: z.array(z.string().min(1)).optional(),
-  features: z.array(z.string().min(1)).optional(),
-  integrations: z.array(z.string().min(1)).optional(),
-  industries: z.array(z.string().min(1)).optional(),
-  comparison_topics: z.array(z.string().min(1)).optional(),
-  faq_questions: z.array(z.string().min(1)).optional(),
-  region: region_array_schema.optional(),
-  language: z.string().min(1).optional(),
   metadata_json: json_record_schema.optional(),
 });
 
@@ -36,6 +24,43 @@ export const prompt_record_schema = z.object({
   metadata_json: json_record_schema.nullable().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
+  archived_at: z.string().nullable().optional(),
+});
+
+export const update_prompt_request_schema = z.object({
+  prompt_text: z.string().trim().min(1).max(2000),
+});
+
+export const prompt_library_item_schema = z.object({
+  id: z.string().min(1),
+  prompt_text: z.string(),
+  cluster_name: z.string(),
+  intent_type: z.string(),
+  language: z.string(),
+  region: z.array(z.string()).nullable(),
+  source_type: z.string(),
+  is_active: z.boolean(),
+  metadata_json: json_record_schema.nullable(),
+  imported_project_prompt_id: z.string().nullable(),
+  is_imported: z.boolean(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+});
+
+export const prompt_library_query_schema = z.object({
+  search: z.string().trim().optional(),
+  limit: z.coerce.number().int().positive().max(200).optional(),
+});
+
+export const prompt_capacity_summary_schema = z.object({
+  project_id: z.string().min(1),
+  organization_id: z.string().min(1),
+  tracked_prompt_limit: z.number().int().nonnegative(),
+  tracked_prompts_in_use: z.number().int().nonnegative(),
+  tracked_prompts_remaining: z.number().int().nonnegative(),
+  active_project_prompt_count: z.number().int().nonnegative(),
+  daily_tracked_prompts_used: z.number().int().nonnegative(),
+  daily_tracked_prompts_remaining: z.number().int().nonnegative(),
 });
 
 export const prompt_set_summary_schema = z.object({

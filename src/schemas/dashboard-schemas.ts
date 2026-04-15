@@ -119,6 +119,38 @@ export const dashboard_clusters_query_schema = dashboard_base_query_input_schema
     sortDirection: value.sortDirection ?? value.sort_direction,
   }));
 
+export const dashboard_prompts_query_schema = z
+  .object({
+    limit: z.coerce.number().int().positive().max(200).optional(),
+    sort_by: z
+      .enum([
+        "promptText",
+        "visibilityPercent",
+        "lastRunAt",
+        "clusterName",
+        "intentType",
+        "sourceType",
+      ])
+      .optional(),
+    sortBy: z
+      .enum([
+        "promptText",
+        "visibilityPercent",
+        "lastRunAt",
+        "clusterName",
+        "intentType",
+        "sourceType",
+      ])
+      .optional(),
+    sort_direction: sort_direction_schema.optional(),
+    sortDirection: sort_direction_schema.optional(),
+  })
+  .transform((value) => ({
+    limit: value.limit,
+    sortBy: value.sortBy ?? value.sort_by,
+    sortDirection: value.sortDirection ?? value.sort_direction,
+  }));
+
 export const dashboard_competitors_query_schema = dashboard_base_query_input_schema
   .extend({
     cluster_name: z.string().min(1).optional(),

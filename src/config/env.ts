@@ -54,6 +54,9 @@ const env_schema = z.object({
   RECONCILER_AUTH_TOKEN: optional_string,
   DAILY_RUNNER_BASE_URL: z.string().url().default(DEFAULT_DAILY_RUNNER_BASE_URL),
   DAILY_RUNNER_AUTH_TOKEN: optional_string,
+  CORE_CORS_ALLOWED_ORIGINS: z
+    .string()
+    .default("http://localhost:3000,http://127.0.0.1:3000"),
   CORE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
   CORE_RATE_LIMIT_DEFAULT_MAX: z.coerce.number().int().positive().default(240),
   CORE_RATE_LIMIT_PROJECT_CREATE_MAX: z.coerce.number().int().positive().default(20),
@@ -67,6 +70,10 @@ const env_schema = z.object({
 }).transform((env) => ({
   ...env,
   DATABASE_SSL_CA_FILE: env.DATABASE_SSL_CA_FILE ?? env.DATABASE_CA_CERT_PATH,
+  CORE_CORS_ALLOWED_ORIGINS: env.CORE_CORS_ALLOWED_ORIGINS
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
 }));
 
 export type Env = z.infer<typeof env_schema>;

@@ -8,6 +8,7 @@ import {
   dashboard_clusters_query_schema,
   dashboard_competitors_query_schema,
   dashboard_models_query_schema,
+  dashboard_prompts_query_schema,
   dashboard_projects_query_schema,
   dashboard_trends_query_schema,
 } from "../schemas/dashboard-schemas";
@@ -28,6 +29,15 @@ export async function register_overview_routes(
     const params = parse_schema(project_params_schema, request.params);
 
     return services.dashboard_service.get_project_overview(
+      request.current_user,
+      params.project_id,
+    );
+  });
+
+  app.get("/projects/:project_id/onboarding-progress", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+
+    return services.dashboard_service.get_project_onboarding_progress(
       request.current_user,
       params.project_id,
     );
@@ -70,6 +80,17 @@ export async function register_overview_routes(
     const query = parse_schema(dashboard_clusters_query_schema, request.query);
 
     return services.dashboard_service.get_cluster_breakdown(
+      request.current_user,
+      params.project_id,
+      query,
+    );
+  });
+
+  app.get("/projects/:project_id/visibility/prompts", async (request) => {
+    const params = parse_schema(project_params_schema, request.params);
+    const query = parse_schema(dashboard_prompts_query_schema, request.query);
+
+    return services.dashboard_service.get_prompt_breakdown(
       request.current_user,
       params.project_id,
       query,

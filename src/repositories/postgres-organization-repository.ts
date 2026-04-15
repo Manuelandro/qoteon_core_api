@@ -140,6 +140,20 @@ export class PostgresOrganizationRepository implements OrganizationRepository {
     }
   }
 
+  async get_organization_by_slug(slug: string): Promise<Organization | null> {
+    try {
+      const result = await this.pool.query<OrganizationRow>(
+        `SELECT * FROM public.core_organizations WHERE slug = $1 LIMIT 1`,
+        [slug],
+      );
+
+      const row = result.rows[0];
+      return row ? map_organization(row) : null;
+    } catch (error) {
+      throw_postgres_error(as_postgres_error(error), "Unable to load organization");
+    }
+  }
+
   async list_all_organizations(): Promise<Organization[]> {
     try {
       const result = await this.pool.query<OrganizationRow>(

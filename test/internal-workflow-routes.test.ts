@@ -66,6 +66,35 @@ test("internal initial baseline route rejects invalid internal auth", async () =
   }
 });
 
+test("internal initial baseline route returns a non-triggered response when no prompts are available", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1", "trial");
+  const project = await context.seed_project("user-1", organization.id);
+  const app = await context.build_app();
+
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: `/internal/projects/${project.id}/runs/initial-baseline`,
+      headers: {
+        authorization: "Bearer qoteon-local-core-token",
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+
+    const payload = response.json();
+
+    assert.equal(payload.project_id, project.id);
+    assert.equal(payload.triggered, false);
+    assert.equal(payload.reason, "no_prompts_available");
+    assert.equal(payload.prompt_count, 0);
+    assert.equal(context.clients.prompt_runner_client.run_batches.size, 0);
+  } finally {
+    await app.close();
+  }
+});
+
 test("internal baseline launch route accepts explicit recovery launches", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1", "trial");
@@ -193,28 +222,6 @@ test("internal daily runner launch route launches daily tracking automatically",
     assert.equal(response.statusCode, 201);
     assert.equal(response.json().triggered, true);
     assert.equal(context.clients.prompt_runner_client.run_batches.size, 1);
-  } finally {
-    await app.close();
-  }
-});
-
-test("internal daily runner prompt-context route reads through core orchestration", async () => {
-  const context = create_test_context();
-  const organization = await context.seed_organization("user-1", "trial");
-  const project = await context.seed_project("user-1", organization.id);
-  const app = await context.build_app();
-
-  try {
-    const response = await app.inject({
-      method: "GET",
-      url: `/internal/projects/${project.id}/daily-runner/prompt-context`,
-      headers: {
-        authorization: "Bearer qoteon-local-core-token",
-      },
-    });
-
-    assert.equal(response.statusCode, 200);
-    assert.equal(response.json().project_id, project.id);
   } finally {
     await app.close();
   }

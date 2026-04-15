@@ -51,6 +51,7 @@ export interface ReconcilerAdminProjectDetail {
     latest_error_message: string | null;
     recommended_next_action: string | null;
     last_attempt_at: string | null;
+    next_retry_at?: string | null;
   } | null;
   diagnostics: {
     baselineRuns: Array<{
@@ -60,6 +61,10 @@ export interface ReconcilerAdminProjectDetail {
       started_at: string | null;
       completed_at: string | null;
     }>;
+    dashboardSummary?: {
+      hasData: boolean;
+      runBatchId: string | null;
+    };
   };
   detected_state: string;
   recommended_next_action: string;

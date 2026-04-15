@@ -6,6 +6,7 @@ import {
   DashboardCompetitorsFilters,
   DashboardModelBreakdown,
   DashboardModelsFilters,
+  DashboardPromptBreakdown,
   DashboardProjectCard,
   DashboardProjectOverview,
   DashboardProjectsFilters,
@@ -37,6 +38,15 @@ export interface DashboardLayerClient {
     project_id: string,
     filters?: DashboardClustersFilters,
   ): Promise<DashboardClusterBreakdown>;
+  get_prompt_breakdown(
+    user: AccessActor,
+    project_id: string,
+    filters?: {
+      limit?: number;
+      sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
+      sortDirection?: "asc" | "desc";
+    },
+  ): Promise<DashboardPromptBreakdown>;
   get_competitor_breakdown(
     user: AccessActor,
     project_id: string,
