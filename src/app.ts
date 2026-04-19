@@ -3,6 +3,7 @@ import Fastify, { FastifyInstance, FastifyReply } from "fastify";
 import { read_env, Env } from "./config/env";
 import { AppError, UnauthorizedError } from "./errors/app-error";
 import { create_app_runtime, AppServices } from "./build-services";
+import { create_logger, JsonLogger } from "./lib/logger";
 import {
   PublicEdgeAdmissionToken,
   PublicEdgeGuard,
@@ -20,18 +21,30 @@ import { register_workflow_routes } from "./routes/workflow-routes";
 export interface BuildAppOptions {
   close_runtime?: () => Promise<void>;
   env?: Env;
-  logger?: boolean;
+  logger?: boolean | JsonLogger;
   services?: AppServices;
 }
 
 export function build_app(options: BuildAppOptions = {}): FastifyInstance {
   const env = options.env ?? read_env();
+  const logger_option = options.logger;
+  const logger_instance: JsonLogger | null =
+    logger_option === true
+      ? create_logger({ service: "qoteon_core_api", component: "api", filename: "api.log" })
+      : logger_option && typeof logger_option === "object"
+        ? logger_option
+        : null;
+  // JsonLogger implements the pino-compatible subset that Fastify needs; the
+  // cast to FastifyBaseLogger keeps the rest of the Fastify types intact.
   const app = Fastify({
-    logger: options.logger ?? false,
+    loggerInstance: logger_instance as unknown as import("fastify").FastifyBaseLogger | undefined,
+    logger: logger_instance ? undefined : false,
     trustProxy: env.CORE_TRUST_PROXY,
     disableRequestLogging: true,
   });
-  const runtime = options.services ? null : create_app_runtime(env, app.log);
+  const runtime = options.services
+    ? null
+    : create_app_runtime(env, app.log, logger_instance ?? undefined);
   const services = options.services ?? runtime!.services;
   const cors_allowed_origins = new Set(env.CORE_CORS_ALLOWED_ORIGINS);
   const public_edge_guard = new PublicEdgeGuard({
@@ -111,13 +124,18 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
     await register_internal_workflow_routes(internal_app, services);
   }, { prefix: "/internal" });
 
+  const request_start_times = new WeakMap<object, bigint>();
+
   app.addHook("onRequest", async (request) => {
+    request_start_times.set(request, process.hrtime.bigint());
     request.log.info(
       {
+        event_type: "http_request",
         request_id: request.id,
         method: request.method,
         url: request.url,
         remote_ip: request.ip,
+        user_agent: request.headers["user-agent"],
       },
       "Incoming request to Core API",
     );
@@ -137,13 +155,19 @@ export function build_app(options: BuildAppOptions = {}): FastifyInstance {
 
   app.addHook("onResponse", async (request, reply) => {
     const token = admission_tokens.get(request);
+    const start = request_start_times.get(request);
+    const duration_ms =
+      start !== undefined ? Number(process.hrtime.bigint() - start) / 1_000_000 : undefined;
+    request_start_times.delete(request);
 
     request.log.info(
       {
+        event_type: "http_response",
         request_id: request.id,
         method: request.method,
         url: request.url,
         status_code: reply.statusCode,
+        duration_ms,
         user_id: request.current_user?.user_id,
         user_role: request.current_user?.role,
       },

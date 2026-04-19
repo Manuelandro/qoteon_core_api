@@ -25,6 +25,7 @@ import {
 } from "../domain/core";
 import { NotFoundError, ValidationError } from "../errors/app-error";
 import { AccessActor } from "../lib/access-actor";
+import { JsonLogger } from "../lib/logger";
 import { to_service_warning } from "../lib/warnings";
 import { PromptLibraryClient } from "../clients/prompt-library-client";
 import { PromptRunnerClient } from "../clients/prompt-runner-client";
@@ -71,9 +72,28 @@ export class OrchestrationService {
     private readonly source_intelligence_client: SourceIntelligenceClient,
     private readonly dashboard_service: DashboardService,
     private readonly entitlement_service: EntitlementService,
+    private readonly logger?: JsonLogger,
   ) {}
 
+  private scoped_logger(bindings: Record<string, unknown>): JsonLogger | undefined {
+    return this.logger?.child(bindings);
+  }
+
   async setup_project(user: AccessActor, input: SetupProjectRequest): Promise<SetupProjectResult> {
+    const log = this.scoped_logger({
+      step: "setup_project",
+      organization_id: input.organization_id,
+      trigger: "project_onboarding",
+    });
+    log?.info(
+      {
+        event_type: "project_setup_start",
+        domain: input.domain,
+        primary_category: input.primary_category,
+        competitor_count: input.competitors?.length ?? 0,
+      },
+      "Project setup start",
+    );
     const { organization } = await this.project_service.assert_organization_access(
       user,
       input.organization_id,
@@ -94,41 +114,42 @@ export class OrchestrationService {
       target_language: input.target_language,
       status: input.status,
     });
+    const project_log = log?.child({ project_id: project.id });
+    project_log?.info(
+      { event_type: "project_created", project_status: project.status },
+      "Project record created",
+    );
 
     const competitors = input.competitors?.length
       ? await this.project_service.create_competitors(user, project.id, input.competitors)
       : [];
-    const warnings =
-      project.status === "active"
-        ? await this.bootstrap_source_intelligence(project.id)
-        : [];
-    const automaticPromptGeneration =
-      project.status === "active"
-        ? await this.generate_prompts_for_active_project(
-            user,
-            project,
-            input.prompt_generation_payload,
-          )
-        : {
-            attempted: false,
-            succeeded: false,
-            result: null,
-            warnings: [] as SetupProjectResult["warnings"],
-          };
+
+    if (project.status === "active") {
+      this.launch_project_setup_automation(user, project, input.prompt_generation_payload, project_log);
+    }
+
+    project_log?.info(
+      {
+        event_type: "project_setup_complete",
+        result_status: "success",
+        warning_count: 0,
+        prompt_generation_attempted: project.status === "active",
+        prompt_generation_succeeded: false,
+        automation_deferred: project.status === "active",
+      },
+      "Project setup complete",
+    );
 
     return {
-      status:
-        warnings.length > 0 || automaticPromptGeneration.warnings.length > 0
-          ? "partial_success"
-          : "success",
+      status: "success",
       project,
       competitors,
       prompt_generation: {
-        attempted: automaticPromptGeneration.attempted,
-        succeeded: automaticPromptGeneration.succeeded,
-        result: automaticPromptGeneration.result,
+        attempted: project.status === "active",
+        succeeded: false,
+        result: null,
       },
-      warnings: [...warnings, ...automaticPromptGeneration.warnings],
+      warnings: [],
     };
   }
 
@@ -320,10 +341,78 @@ export class OrchestrationService {
     );
     this.entitlement_service.assert_compute_access(organization, "project_setup");
 
-    await this.bootstrap_source_intelligence(project.id);
-    await this.generate_prompts_for_active_project(user, project);
+    this.launch_project_setup_automation(user, project);
 
     return project;
+  }
+
+  private launch_project_setup_automation(
+    user: AccessActor,
+    project: Project,
+    payload?: PromptGenerationPayload,
+    parent_log?: JsonLogger,
+  ): void {
+    const log = (parent_log ?? this.logger)?.child({
+      step: "project_setup_automation",
+      project_id: project.id,
+      organization_id: project.organization_id,
+    });
+
+    log?.info(
+      { event_type: "project_setup_automation_queued" },
+      "Project setup automation queued",
+    );
+
+    void this.run_project_setup_automation(user, project, payload, log).catch((error) => {
+      log?.error(
+        {
+          event_type: "project_setup_automation_failed",
+          error_code: "project_setup_automation_failed",
+          err: error instanceof Error ? error : new Error(String(error)),
+        },
+        "Project setup automation failed",
+      );
+    });
+  }
+
+  private async run_project_setup_automation(
+    user: AccessActor,
+    project: Project,
+    payload?: PromptGenerationPayload,
+    parent_log?: JsonLogger,
+  ): Promise<void> {
+    const log = (parent_log ?? this.logger)?.child({
+      step: "project_setup_automation",
+      project_id: project.id,
+      organization_id: project.organization_id,
+    });
+
+    log?.info(
+      { event_type: "project_setup_automation_start" },
+      "Project setup automation start",
+    );
+
+    const warnings = await this.bootstrap_source_intelligence(project.id, log);
+    const automaticPromptGeneration = await this.generate_prompts_for_active_project(
+      user,
+      project,
+      payload,
+      log,
+    );
+    const combined_warnings = [...warnings, ...automaticPromptGeneration.warnings];
+    const result_status =
+      combined_warnings.length > 0 ? "partial_success" : "success";
+
+    log?.info(
+      {
+        event_type: "project_setup_automation_complete",
+        result_status,
+        warning_count: combined_warnings.length,
+        prompt_generation_attempted: automaticPromptGeneration.attempted,
+        prompt_generation_succeeded: automaticPromptGeneration.succeeded,
+      },
+      "Project setup automation complete",
+    );
   }
 
   async launch_baseline_scan(
@@ -443,6 +532,13 @@ export class OrchestrationService {
         response: AutomaticInitialBaselineRunResult;
       }
   > {
+    const log = this.scoped_logger({
+      step: "prepare_automatic_initial_baseline",
+      project_id,
+      trigger: "initial_baseline_after_onboarding",
+    });
+    log?.info({ event_type: "baseline_decision_start" }, "Evaluating automatic initial baseline");
+
     const project = await this.project_service.assert_project_access(INTERNAL_AUTOMATION_ACTOR, project_id);
     const { organization } = await this.project_service.assert_organization_access(
       INTERNAL_AUTOMATION_ACTOR,
@@ -456,8 +552,21 @@ export class OrchestrationService {
       prompt_set = await this.prompt_library_client.get_prompt_set(project_id, "baseline");
     } catch (error) {
       if (!(error instanceof NotFoundError)) {
+        log?.error(
+          {
+            event_type: "baseline_decision_failed",
+            error_code: "prompt_set_fetch_failed",
+            err: error instanceof Error ? error : new Error(String(error)),
+          },
+          "Failed to fetch baseline prompt set",
+        );
         throw error;
       }
+
+      log?.info(
+        { event_type: "baseline_not_triggered", reason: "no_prompts_available" },
+        "Baseline skipped — no prompts available",
+      );
 
       return {
         triggered: false,
@@ -474,6 +583,10 @@ export class OrchestrationService {
     }
 
     if (prompt_set.prompt_ids.length === 0) {
+      log?.info(
+        { event_type: "baseline_not_triggered", reason: "no_prompts_available" },
+        "Baseline skipped — prompt set is empty",
+      );
       return {
         triggered: false,
         response: {
@@ -496,6 +609,15 @@ export class OrchestrationService {
     const existing_run = existing_baseline_runs[0];
 
     if (existing_run && sameIdSet(existing_run.prompt_ids, prompt_set.prompt_ids)) {
+      log?.info(
+        {
+          event_type: "baseline_not_triggered",
+          reason: "baseline_already_exists",
+          run_batch_id: existing_run.id,
+          run_status: existing_run.status,
+        },
+        "Baseline skipped — reusable run already exists",
+      );
       return {
         triggered: false,
         response: {
@@ -519,6 +641,10 @@ export class OrchestrationService {
       .map((model) => model.id);
 
     if (ai_model_ids.length === 0) {
+      log?.warn(
+        { event_type: "baseline_not_triggered", reason: "no_active_ai_models" },
+        "Baseline skipped — no active AI models configured",
+      );
       return {
         triggered: false,
         response: {
@@ -532,6 +658,15 @@ export class OrchestrationService {
         },
       };
     }
+
+    log?.info(
+      {
+        event_type: "baseline_triggered",
+        prompt_count: prompt_set.prompt_count,
+        ai_model_count: ai_model_ids.length,
+      },
+      "Baseline launch approved",
+    );
 
     return {
       triggered: true,
@@ -806,8 +941,11 @@ export class OrchestrationService {
     }
   }
 
-  private async bootstrap_source_intelligence(project_id: string): Promise<SetupProjectResult["warnings"]> {
-    return this.bootstrap_source_intelligence_targets(project_id, "all");
+  private async bootstrap_source_intelligence(
+    project_id: string,
+    log?: JsonLogger,
+  ): Promise<SetupProjectResult["warnings"]> {
+    return this.bootstrap_source_intelligence_targets(project_id, "all", log);
   }
 
   private async assert_prompt_capacity_available(
@@ -863,12 +1001,28 @@ export class OrchestrationService {
   private async bootstrap_source_intelligence_targets(
     project_id: string,
     target_scope: "all" | "competitors",
+    parent_log?: JsonLogger,
   ): Promise<SetupProjectResult["warnings"]> {
     const warnings: SetupProjectResult["warnings"] = [];
+    const log = (parent_log ?? this.logger)?.child({
+      step: "bootstrap_source_intelligence",
+      project_id,
+      target_scope,
+    });
+
+    log?.info({ event_type: "crawl_bootstrap_start" }, "Source Intelligence bootstrap start");
 
     try {
       await this.source_intelligence_client.bootstrap_crawl_targets(project_id);
     } catch (error) {
+      log?.error(
+        {
+          event_type: "crawl_bootstrap_failed",
+          error_code: "source_intelligence_bootstrap_failed",
+          err: error instanceof Error ? error : new Error(String(error)),
+        },
+        "Source Intelligence bootstrap failed",
+      );
       warnings.push(
         to_service_warning(
           "source_intelligence",
@@ -887,7 +1041,19 @@ export class OrchestrationService {
         scope_type: "full",
         trigger_type: "project_setup",
       });
+      log?.info(
+        { event_type: "crawl_bootstrap_complete" },
+        "Source Intelligence bootstrap complete",
+      );
     } catch (error) {
+      log?.error(
+        {
+          event_type: "crawl_bootstrap_crawl_enqueue_failed",
+          error_code: "source_intelligence_initial_crawl_failed",
+          err: error instanceof Error ? error : new Error(String(error)),
+        },
+        "Initial crawl enqueue failed",
+      );
       warnings.push(
         to_service_warning(
           "source_intelligence",
@@ -905,23 +1071,45 @@ export class OrchestrationService {
     user: AccessActor,
     project: Project,
     payload: PromptGenerationPayload = {},
+    parent_log?: JsonLogger,
   ): Promise<{
     attempted: boolean;
     succeeded: boolean;
     result: PromptGenerationResult | null;
     warnings: SetupProjectResult["warnings"];
   }> {
+    const log = (parent_log ?? this.logger)?.child({
+      step: "generate_prompts",
+      project_id: project.id,
+      organization_id: project.organization_id,
+    });
     const { organization } = await this.project_service.assert_organization_access(
       user,
       project.organization_id,
     );
     const warnings: SetupProjectResult["warnings"] = [];
 
+    log?.info(
+      { event_type: "prompt_generation_requested" },
+      "Prompt generation requested",
+    );
+
     try {
       this.entitlement_service.assert_compute_access(organization, "prompt_generation");
+      const started_at = Date.now();
       const result = await this.prompt_library_client.generate_project_prompts(
         project.id,
         build_prompt_generation_payload(payload),
+      );
+      log?.info(
+        {
+          event_type: "prompt_generation_succeeded",
+          duration_ms: Date.now() - started_at,
+          generated_count: result.generated_count,
+          total_prompts: result.total_prompts,
+          active_prompts: result.active_prompts,
+        },
+        "Prompt generation succeeded",
       );
 
       return {
@@ -931,6 +1119,14 @@ export class OrchestrationService {
         warnings,
       };
     } catch (error) {
+      log?.error(
+        {
+          event_type: "prompt_generation_failed",
+          error_code: "prompt_generation_failed",
+          err: error instanceof Error ? error : new Error(String(error)),
+        },
+        "Prompt generation failed",
+      );
       warnings.push(
         to_service_warning(
           "prompt_library",

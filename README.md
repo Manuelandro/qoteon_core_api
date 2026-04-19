@@ -19,9 +19,11 @@ Implemented:
 - prompt generation and prompt-state orchestration through Prompt Library
 - prompt edit, archive, project-generated prompt-pool activation, and tracked-capacity summary through Prompt Library orchestration
 - automatic prompt generation when a project becomes active, without waiting for crawl-derived prompt context
+- non-blocking active-project automation for onboarding, so `POST /projects` and draft-to-active `PATCH /projects/:project_id` return before crawl bootstrap and prompt generation finish
 - baseline and `daily_tracking` launch orchestration through Prompt Runner
 - dashboard proxy routes through Dashboard Layer
 - Reconciler-backed `GET /projects/:project_id/onboarding-progress` mapping for the owner frontend onboarding-completion modal
+- onboarding completion gating that waits for the latest relevant baseline to finish parser/scoring processing and dashboard materialization before the modal can close
 - prompt-level visibility analytics proxied from Dashboard Layer
 - admin proxy routes for Daily Runner and Reconciler
 - Core-shaped admin launch list routes for baseline-oriented and established projects
@@ -81,9 +83,10 @@ Core does not own:
 2. ask Prompt Runner for competitor suggestions
 3. persist the selected competitors in Core
 4. activate the project only after onboarding confirmation
-5. once the project becomes `active`, bootstrap crawl work in Source Intelligence and request prompt generation from Prompt Library in parallel
-6. the frontend should redirect immediately into the restricted dashboard and poll Core for onboarding completion while the same automatic pipeline continues in the background
-7. Core should only report onboarding `completed` once dashboard data is actually renderable, using the Reconciler-backed dashboard-ready signal instead of a looser upstream run state
+5. as soon as the project becomes `active`, Core queues crawl bootstrap in Source Intelligence and prompt generation in Prompt Library without waiting for those downstream calls to finish
+6. `POST /projects` and the draft-to-active patch path both return immediately after the project is active, so the frontend can redirect straight into the restricted dashboard
+7. the frontend should poll Core for onboarding completion while the same automatic pipeline continues in the background
+8. Core should only report onboarding `completed` once dashboard data is actually renderable, using the Reconciler-backed dashboard-ready signal instead of a looser upstream run state
 
 ### Prompt and run orchestration
 
@@ -197,7 +200,7 @@ The response is shaped for UI consumption:
 - `message`
   the user-facing stage label used in the dashboard modal
 - `dashboardReady`
-  `true` only when Reconciler can confirm that dashboard data is renderable now
+  `true` only when Reconciler can confirm that dashboard data is renderable now for the latest completed onboarding baseline
 - `isTerminal`
   `true` for `completed` and for blocked states where the frontend should stop trapping the user behind the modal
 - `backendStateCode` and `backendStateMessage`
@@ -206,10 +209,11 @@ The response is shaped for UI consumption:
 Current mapping:
 
 - `project_created_no_crawl` and phase `project` -> `initializing`
-- `crawl_*` states and crawl or prompt-context phases -> `crawling_page`
-- `prompt_generation_*` states and phase `prompt_generation` -> `generating_prompts`
-- baseline, dashboard-materialization gap, `healthy`, and later daily-adjacent recovery states before `dashboardReady` -> `running_baseline`
-- `completed` only when Reconciler reports dashboard-ready data, currently through `dashboardSummary.hasData`
+- active or failed client-crawl signals keep the UI in `crawling_page` even if prompt generation was already requested in parallel, so the progress bar does not move backward during onboarding
+- after crawl clears, missing prompts or prompt-generation states map to `generating_prompts`
+- baseline execution, baseline parser/scoring catch-up, and baseline dashboard-materialization states map to `running_baseline`
+- `completed` only when the latest relevant baseline run is `completed` and Core can verify dashboard-ready data for that same baseline run through Reconciler diagnostics
+- if Reconciler still exposes a loose upstream `dashboard_ready` or `healthy` code before that stricter onboarding gate is met, Core rewrites the exposed backend state to the pending baseline-stage code so the frontend does not receive a contradictory payload
 
 ## Prompt quota semantics
 
@@ -290,6 +294,12 @@ npm run build
 npm run start
 ```
 
+For a shared local database reset from the repo root while preserving `core_users`, `schema_migrations`, and `project_prompt_runner_ai_models`:
+
+```bash
+./scripts/reset-shared-db.sh --env-file qoteon_core_api/.env --yes
+```
+
 ## Scripts
 
 - `npm run build`
@@ -316,3 +326,31 @@ Notes:
 - `CORE_CORS_ALLOWED_ORIGINS` is a comma-separated browser allowlist for direct frontend polling; keep local frontend origins here and add the deployed owner-frontend origin in production
 
 See [`.env.example`](./.env.example) for the current local and production defaults.
+
+## Logging
+
+Core API writes structured JSON logs to stdout and to an append file at `logs/api.log`. See [`qoteon_docs/OBSERVABILITY.md`](../qoteon_docs/OBSERVABILITY.md) for the shared contract.
+
+Notable Core API log events:
+
+- `project_setup_start` / `project_setup_complete` / `project_created`
+- `crawl_bootstrap_start` / `crawl_bootstrap_complete` / `crawl_bootstrap_failed`
+- `prompt_generation_requested` / `prompt_generation_succeeded` / `prompt_generation_failed`
+- `baseline_decision_start` / `baseline_triggered` / `baseline_not_triggered` / `baseline_decision_failed`
+- `http_request` / `http_response` with `request_id` and `duration_ms`
+
+Env vars (all optional):
+
+- `LOG_LEVEL` (default `info`)
+- `LOG_TO_FILE` (`true`/`false`, default `true`)
+- `LOG_DIR` (default `./logs`)
+- `LOG_PRETTY` (`true`/`false`, default `false`)
+
+Tail locally:
+
+```bash
+tail -F logs/api.log | jq .
+rg '"project_id":"<project-id>"' logs/api.log
+```
+
+The `logs/` directory is gitignored.

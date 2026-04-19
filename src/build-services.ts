@@ -1,6 +1,7 @@
 import { type Pool } from "pg";
 import { FastifyBaseLogger } from "fastify";
 
+import { JsonLogger } from "./lib/logger";
 import { DashboardLayerClient } from "./clients/dashboard-layer-client";
 import { DailyRunnerClient } from "./clients/daily-runner-client";
 import { HttpDashboardLayerClient } from "./clients/http-dashboard-layer-client";
@@ -57,7 +58,11 @@ export interface AppRuntime {
   services: AppServices;
 }
 
-export function create_app_runtime(env: Env, logger?: FastifyBaseLogger): AppRuntime {
+export function create_app_runtime(
+  env: Env,
+  logger?: FastifyBaseLogger,
+  structured_logger?: JsonLogger,
+): AppRuntime {
   const pool = create_database_pool({
     connection_string: env.DATABASE_URL,
     ssl_mode: env.DATABASE_SSL_MODE,
@@ -66,7 +71,7 @@ export function create_app_runtime(env: Env, logger?: FastifyBaseLogger): AppRun
     ...(env.DATABASE_SSL_KEY_FILE ? { ssl_key_file: env.DATABASE_SSL_KEY_FILE } : {}),
   });
 
-  const services = create_app_services(env, pool, logger);
+  const services = create_app_services(env, pool, logger, structured_logger);
 
   return {
     services,
@@ -80,6 +85,7 @@ export function create_app_services(
   env: Env,
   pool: Pool,
   logger?: Pick<FastifyBaseLogger, "info" | "error">,
+  structured_logger?: JsonLogger,
 ): AppServices {
   const user_repository: UserRepository = new PostgresUserRepository(pool);
   const organization_repository: OrganizationRepository = new PostgresOrganizationRepository(pool);
@@ -167,6 +173,7 @@ export function create_app_services(
     source_intelligence_client,
     dashboard_service,
     entitlement_service,
+    structured_logger,
   );
   const workflow_idempotency_repository = new PostgresWorkflowIdempotencyRepository(pool);
   const workflow_concurrency_guard = new PostgresWorkflowConcurrencyGuard(pool);

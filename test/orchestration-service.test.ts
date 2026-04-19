@@ -3,9 +3,16 @@ import assert from "node:assert/strict";
 
 import { create_test_context } from "./helpers/test-context";
 
-test("setup_project bootstraps crawl work and generates prompts immediately for active projects", async () => {
+async function flush_background_automation() {
+  await new Promise((resolve) => setTimeout(resolve, 75));
+}
+
+test("setup_project returns before active-project automation finishes and continues in the background", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
+  context.clients.source_intelligence_client.create_crawl_runs_delay_ms = 50;
+
+  const started_at = Date.now();
 
   const result = await context.services.orchestration_service.setup_project("user-1", {
     organization_id: organization.id,
@@ -23,16 +30,25 @@ test("setup_project bootstraps crawl work and generates prompts immediately for 
       },
     ],
   });
+  const duration_ms = Date.now() - started_at;
 
   assert.equal(result.status, "success");
   assert.equal(result.project.name, "Acme Project");
   assert.equal(result.competitors.length, 1);
   assert.equal(result.prompt_generation.attempted, true);
-  assert.equal(result.prompt_generation.succeeded, true);
-  assert.ok(result.prompt_generation.result?.generated_count);
+  assert.equal(result.prompt_generation.succeeded, false);
+  assert.equal(result.prompt_generation.result, null);
   assert.equal(result.warnings.length, 0);
+  assert.ok(duration_ms < 50);
+  assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
+
+  await flush_background_automation();
+
   assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
+  const generated_prompts =
+    context.clients.prompt_library_client.prompts_by_project.get(result.project.id) ?? [];
+  assert.ok(generated_prompts.length > 0);
 });
 
 test("setup_project does not bootstrap source intelligence for draft projects", async () => {
@@ -91,6 +107,7 @@ test("update_project bootstraps source intelligence when a draft project becomes
 
   assert.equal(updated.status, "active");
   assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
+  await flush_background_automation();
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
 });
 
@@ -844,7 +861,7 @@ test("prefill_project_competitors returns existing competitors without calling p
   );
 });
 
-test("setup_project returns partial_success when source intelligence bootstrap fails", async () => {
+test("setup_project still returns success when background source intelligence bootstrap fails", async () => {
   const context = create_test_context();
   const organization = await context.seed_organization("user-1");
   context.clients.source_intelligence_client.fail_bootstrap = new Error("source intelligence down");
@@ -861,6 +878,8 @@ test("setup_project returns partial_success when source intelligence bootstrap f
     generate_initial_prompts: false,
   });
 
-  assert.equal(result.status, "partial_success");
-  assert.equal(result.warnings[0]?.service, "source_intelligence");
+  assert.equal(result.status, "success");
+  assert.equal(result.warnings.length, 0);
+  await flush_background_automation();
+  assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
 });

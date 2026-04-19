@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 
 import { create_test_context } from "./helpers/test-context";
 
+async function flush_background_automation() {
+  await new Promise((resolve) => setTimeout(resolve, 75));
+}
+
 test("organization creation defaults self-serve accounts to trial", async (t) => {
   const context = create_test_context();
   const app = await context.build_app();
@@ -82,6 +86,7 @@ test("organization creation is idempotent for duplicate slug requests from the s
 
 test("project creation route creates project, competitors, and defers prompt generation", async (t) => {
   const context = create_test_context();
+  context.clients.source_intelligence_client.create_crawl_runs_delay_ms = 50;
   const app = await context.build_app();
   t.after(async () => {
     await app.close();
@@ -134,10 +139,16 @@ test("project creation route creates project, competitors, and defers prompt gen
   assert.equal(payload.project.organization_id, organization.id);
   assert.equal(payload.competitors.length, 1);
   assert.equal(payload.prompt_generation.attempted, true);
-  assert.equal(payload.prompt_generation.succeeded, true);
-  assert.ok(payload.prompt_generation.result.generated_count > 0);
+  assert.equal(payload.prompt_generation.succeeded, false);
+  assert.equal(payload.prompt_generation.result, null);
   assert.equal(context.clients.source_intelligence_client.bootstrap_call_count, 1);
+
+  await flush_background_automation();
+
   assert.equal(context.clients.source_intelligence_client.create_crawl_runs_call_count, 1);
+  const generated_prompts =
+    context.clients.prompt_library_client.prompts_by_project.get(payload.project.id) ?? [];
+  assert.ok(generated_prompts.length > 0);
 });
 
 test("project creation route returns 429 when edge rate limit is exceeded", async (t) => {

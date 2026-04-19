@@ -57,6 +57,26 @@ export interface ReconcilerAdminProjectDetail {
     baselineRuns: Array<{
       id: string;
       status: string;
+      prompt_ids?: string[];
+      created_at: string;
+      started_at: string | null;
+      completed_at: string | null;
+    }>;
+    baselinePromptSet?: {
+      prompt_ids: string[];
+    };
+    latestBaselineProcessingState?: {
+      runBatchId: string;
+      isFullyProcessed: boolean;
+    };
+    latestBaselineDashboardState?: {
+      hasData: boolean;
+      runBatchId: string | null;
+      probeSucceeded: boolean;
+    };
+    crawlRuns?: Array<{
+      id: string;
+      status: string;
       created_at: string;
       started_at: string | null;
       completed_at: string | null;
@@ -65,6 +85,12 @@ export interface ReconcilerAdminProjectDetail {
       hasData: boolean;
       runBatchId: string | null;
     };
+    promptContext?: {
+      client_website_crawl_status: string;
+    };
+    prompts?: Array<{
+      id: string;
+    }>;
   };
   detected_state: string;
   recommended_next_action: string;
