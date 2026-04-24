@@ -6,7 +6,10 @@ import {
   DashboardCompetitorsFilters,
   DashboardModelBreakdown,
   DashboardModelsFilters,
+  DashboardPromptEvidenceFilters,
+  DashboardPromptEvidenceResponse,
   DashboardPromptBreakdown,
+  DashboardPromptsFilters,
   DashboardProjectCard,
   DashboardProjectOverview,
   DashboardProjectsFilters,
@@ -923,6 +926,7 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   portfolio_projects_response: DashboardProjectCard[] = [];
   visibility_summary_response: DashboardVisibilitySummary | null = null;
   prompt_breakdown_response: DashboardPromptBreakdown | null = null;
+  prompt_evidence_response: DashboardPromptEvidenceResponse | null = null;
   model_breakdown_response: DashboardModelBreakdown | null = null;
   cluster_breakdown_response: DashboardClusterBreakdown | null = null;
   competitor_breakdown_response: DashboardCompetitorBreakdown | null = null;
@@ -941,11 +945,15 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
     | {
         user_id: string;
         project_id: string;
-        filters?: {
-          limit?: number;
-          sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
-          sortDirection?: "asc" | "desc";
-        };
+        filters?: DashboardPromptsFilters;
+      }
+    | null = null;
+  last_prompt_evidence_request:
+    | {
+        user_id: string;
+        project_id: string;
+        prompt_id: string;
+        filters: DashboardPromptEvidenceFilters;
       }
     | null = null;
   last_cluster_request:
@@ -1016,11 +1024,7 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
   async get_prompt_breakdown(
     user: AccessActor,
     project_id: string,
-    filters?: {
-      limit?: number;
-      sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
-      sortDirection?: "asc" | "desc";
-    },
+    filters?: DashboardPromptsFilters,
   ): Promise<DashboardPromptBreakdown> {
     const actor = resolve_access_actor(user);
     this.last_prompt_request = { user_id: actor.user_id, project_id, filters };
@@ -1031,6 +1035,23 @@ export class FakeDashboardLayerClient implements DashboardLayerClient {
     }
 
     return this.prompt_breakdown_response;
+  }
+
+  async get_prompt_evidence(
+    user: AccessActor,
+    project_id: string,
+    prompt_id: string,
+    filters: DashboardPromptEvidenceFilters,
+  ): Promise<DashboardPromptEvidenceResponse> {
+    const actor = resolve_access_actor(user);
+    this.last_prompt_evidence_request = { user_id: actor.user_id, project_id, prompt_id, filters };
+    this.throw_if_needed();
+
+    if (!this.prompt_evidence_response) {
+      throw new NotFoundError("Dashboard prompt evidence not found");
+    }
+
+    return this.prompt_evidence_response;
   }
 
   async get_cluster_breakdown(

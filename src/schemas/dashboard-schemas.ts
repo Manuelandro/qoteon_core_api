@@ -121,6 +121,14 @@ export const dashboard_clusters_query_schema = dashboard_base_query_input_schema
 
 export const dashboard_prompts_query_schema = z
   .object({
+    run_batch_id: id_schema.optional(),
+    runBatchId: id_schema.optional(),
+    run_type: z.enum(DASHBOARD_RUN_TYPES).optional(),
+    runType: z.enum(DASHBOARD_RUN_TYPES).optional(),
+    start_date: iso_datetime_schema.optional(),
+    startDate: iso_datetime_schema.optional(),
+    end_date: iso_datetime_schema.optional(),
+    endDate: iso_datetime_schema.optional(),
     limit: z.coerce.number().int().positive().max(200).optional(),
     sort_by: z
       .enum([
@@ -130,6 +138,8 @@ export const dashboard_prompts_query_schema = z
         "clusterName",
         "intentType",
         "sourceType",
+        "mentionCount",
+        "citationCount",
       ])
       .optional(),
     sortBy: z
@@ -140,15 +150,38 @@ export const dashboard_prompts_query_schema = z
         "clusterName",
         "intentType",
         "sourceType",
+        "mentionCount",
+        "citationCount",
       ])
       .optional(),
     sort_direction: sort_direction_schema.optional(),
     sortDirection: sort_direction_schema.optional(),
   })
   .transform((value) => ({
+    runBatchId: value.runBatchId ?? value.run_batch_id,
+    runType: value.runType ?? value.run_type,
+    startDate: value.startDate ?? value.start_date,
+    endDate: value.endDate ?? value.end_date,
     limit: value.limit,
     sortBy: value.sortBy ?? value.sort_by,
     sortDirection: value.sortDirection ?? value.sort_direction,
+  }));
+
+export const dashboard_prompt_evidence_query_schema = z
+  .object({
+    evidence_type: z.enum(["mentions", "citations"]).optional(),
+    evidenceType: z.enum(["mentions", "citations"]).optional(),
+    start_date: iso_datetime_schema.optional(),
+    startDate: iso_datetime_schema.optional(),
+    end_date: iso_datetime_schema.optional(),
+    endDate: iso_datetime_schema.optional(),
+    limit: z.coerce.number().int().positive().max(50).optional(),
+  })
+  .transform((value) => ({
+    evidenceType: value.evidenceType ?? value.evidence_type ?? "mentions",
+    startDate: value.startDate ?? value.start_date,
+    endDate: value.endDate ?? value.end_date,
+    limit: value.limit,
   }));
 
 export const dashboard_competitors_query_schema = dashboard_base_query_input_schema
@@ -160,8 +193,10 @@ export const dashboard_competitors_query_schema = dashboard_base_query_input_sch
       .enum([
         "competitorName",
         "totalMentions",
+        "totalCitations",
         "mentionRate",
         "shareOfVoice",
+        "visibilityScore",
         "winsAgainstClientCount",
         "clientVsCompetitorDelta",
       ])
@@ -170,8 +205,10 @@ export const dashboard_competitors_query_schema = dashboard_base_query_input_sch
       .enum([
         "competitorName",
         "totalMentions",
+        "totalCitations",
         "mentionRate",
         "shareOfVoice",
+        "visibilityScore",
         "winsAgainstClientCount",
         "clientVsCompetitorDelta",
       ])

@@ -19,9 +19,11 @@ Implemented:
 - prompt generation and prompt-state orchestration through Prompt Library
 - prompt edit, archive, project-generated prompt-pool activation, and tracked-capacity summary through Prompt Library orchestration
 - automatic prompt generation when a project becomes active, without waiting for crawl-derived prompt context
+- longer Prompt Library request timeouts for automatic prompt generation, aligned with Prompt Library's provider timeout so successful onboarding generations are not marked failed prematurely
 - non-blocking active-project automation for onboarding, so `POST /projects` and draft-to-active `PATCH /projects/:project_id` return before crawl bootstrap and prompt generation finish
 - baseline and `daily_tracking` launch orchestration through Prompt Runner
 - dashboard proxy routes through Dashboard Layer
+- dashboard competitor proxy reads that now expose mention-plus-citation comparison rows from Dashboard Layer
 - Reconciler-backed `GET /projects/:project_id/onboarding-progress` mapping for the owner frontend onboarding-completion modal
 - onboarding completion gating that waits for the latest relevant baseline to finish parser/scoring processing and dashboard materialization before the modal can close
 - prompt-level visibility analytics proxied from Dashboard Layer
@@ -84,6 +86,7 @@ Core does not own:
 3. persist the selected competitors in Core
 4. activate the project only after onboarding confirmation
 5. as soon as the project becomes `active`, Core queues crawl bootstrap in Source Intelligence and prompt generation in Prompt Library without waiting for those downstream calls to finish
+   Core now gives that Prompt Library call a longer internal timeout so normal `30-60s` prompt generations can finish without being logged as transport failures.
 6. `POST /projects` and the draft-to-active patch path both return immediately after the project is active, so the frontend can redirect straight into the restricted dashboard
 7. the frontend should poll Core for onboarding completion while the same automatic pipeline continues in the background
 8. Core should only report onboarding `completed` once dashboard data is actually renderable, using the Reconciler-backed dashboard-ready signal instead of a looser upstream run state
@@ -184,8 +187,30 @@ All routes except `GET /health` require auth.
 - `GET /projects/:project_id/visibility/clusters`
 - `GET /projects/:project_id/visibility/competitors`
 - `GET /projects/:project_id/visibility/prompts`
+- `GET /projects/:project_id/visibility/prompts/:prompt_id/evidence`
 - `GET /projects/:project_id/visibility/trends`
 - `GET /run-batches/:run_batch_id/results`
+
+Core remains the frontend boundary for dashboard data. The frontend must call these routes rather than Dashboard Layer, Parsing + Score, Prompt Runner, or object storage directly.
+
+`GET /projects/:project_id/visibility/prompts` proxies rolling-window prompt analytics from Dashboard Layer. Supported filters include `startDate`, `endDate`, `runType`, and `runBatchId`; prompt rows include client-only `mentionCount`, client-only `citationCount`, and `lastRunAt`.
+
+`GET /projects/:project_id/visibility/prompts/:prompt_id/evidence` proxies lazy prompt drilldowns. Prompt evidence is client-only: `evidenceType=mentions` returns only primary-brand mention-backed executions; `evidenceType=citations` returns only primary-brand citation-backed executions and includes client cited page URLs. The response includes model name, run type, timestamp, counts, and normalized full response text.
+
+`GET /projects/:project_id/visibility/competitors` proxies expanded comparison rows that can include:
+
+- `entityRole`
+- `entityName`
+- `entityDomain`
+- `visibilityScore`
+- `shareOfVoice`
+- `totalMentions`
+- `totalCitations`
+- `surfacedExecutionCount`
+- `executionsWithClientCount`
+- `executionsWithoutClientCount`
+
+Those values are derived downstream from Parsing + Score mention and citation evidence only. Core does not add any competitor crawl dependency to this read path. The Dashboard Layer response orders the client first and then competitors by the selected sort.
 
 ### Onboarding progress contract
 

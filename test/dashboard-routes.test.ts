@@ -116,6 +116,8 @@ test("GET /projects/:project_id/visibility/prompts proxies prompt analysis rows"
         isActive: true,
         totalCompletedExecutions: 2,
         executionsWithBrandMention: 1,
+        mentionCount: 3,
+        citationCount: 1,
         visibilityPercent: 0.5,
         lastRunAt: "2026-04-14T08:00:00.000Z",
         lastRunBatchId: "run-1",
@@ -135,7 +137,7 @@ test("GET /projects/:project_id/visibility/prompts proxies prompt analysis rows"
 
   const response = await app.inject({
     method: "GET",
-    url: `/projects/${project.id}/visibility/prompts?limit=25&sort_by=lastRunAt&sort_direction=asc`,
+    url: `/projects/${project.id}/visibility/prompts?limit=25&sort_by=lastRunAt&sort_direction=asc&start_date=2026-04-14T00:00:00.000Z`,
     headers: {
       "x-user-id": "user-1",
       "x-user-email": "user-1@example.com",
@@ -146,11 +148,80 @@ test("GET /projects/:project_id/visibility/prompts proxies prompt analysis rows"
   assert.equal(response.json().items[0].promptId, "prompt-1");
   assert.deepEqual(context.clients.dashboard_layer_client.last_prompt_request, {
     user_id: "user-1",
+      project_id: project.id,
+      filters: {
+        runBatchId: undefined,
+        runType: undefined,
+        startDate: "2026-04-14T00:00:00.000Z",
+        endDate: undefined,
+        limit: 25,
+        sortBy: "lastRunAt",
+        sortDirection: "asc",
+    },
+  });
+
+  await app.close();
+});
+
+test("GET /projects/:project_id/visibility/prompts/:prompt_id/evidence proxies prompt evidence filters", async () => {
+  const context = create_test_context();
+  const organization = await context.seed_organization("user-1");
+  const project = await context.seed_project("user-1", organization.id);
+  const app = await context.build_app();
+
+  context.clients.dashboard_layer_client.prompt_evidence_response = {
+    projectId: project.id,
+    promptId: "prompt-1",
+    evidenceType: "citations",
+    items: [
+      {
+        promptExecutionId: "execution-1",
+        runBatchId: "run-1",
+        runType: "daily_tracking",
+        modelName: "gpt-5.4",
+        observedAt: "2026-04-14T08:00:00.000Z",
+        mentionCount: 1,
+        citationCount: 1,
+        responseText: "Full model response",
+        citations: [
+          {
+            citationUrl: "https://acme.com/docs",
+            citationTitle: "Docs",
+            citationDomain: "acme.com",
+            entityRole: "primary_brand",
+            matchedEntityName: "Acme",
+          },
+        ],
+        responseSource: "parsing_score_raw_response_text",
+      },
+    ],
+    summary: {
+      totalItems: 1,
+      startDate: "2026-04-14T00:00:00.000Z",
+      endDate: null,
+    },
+  };
+
+  const response = await app.inject({
+    method: "GET",
+    url: `/projects/${project.id}/visibility/prompts/prompt-1/evidence?evidence_type=citations&start_date=2026-04-14T00:00:00.000Z&limit=10`,
+    headers: {
+      "x-user-id": "user-1",
+      "x-user-email": "user-1@example.com",
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().items[0].responseText, "Full model response");
+  assert.deepEqual(context.clients.dashboard_layer_client.last_prompt_evidence_request, {
+    user_id: "user-1",
     project_id: project.id,
+    prompt_id: "prompt-1",
     filters: {
-      limit: 25,
-      sortBy: "lastRunAt",
-      sortDirection: "asc",
+      evidenceType: "citations",
+      startDate: "2026-04-14T00:00:00.000Z",
+      endDate: undefined,
+      limit: 10,
     },
   });
 

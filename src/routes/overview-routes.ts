@@ -8,6 +8,7 @@ import {
   dashboard_clusters_query_schema,
   dashboard_competitors_query_schema,
   dashboard_models_query_schema,
+  dashboard_prompt_evidence_query_schema,
   dashboard_prompts_query_schema,
   dashboard_projects_query_schema,
   dashboard_trends_query_schema,
@@ -15,6 +16,10 @@ import {
 
 const project_params_schema = z.object({
   project_id: z.string().min(1),
+});
+
+const project_prompt_params_schema = project_params_schema.extend({
+  prompt_id: z.string().min(1),
 });
 
 const run_batch_params_schema = z.object({
@@ -93,6 +98,18 @@ export async function register_overview_routes(
     return services.dashboard_service.get_prompt_breakdown(
       request.current_user,
       params.project_id,
+      query,
+    );
+  });
+
+  app.get("/projects/:project_id/visibility/prompts/:prompt_id/evidence", async (request) => {
+    const params = parse_schema(project_prompt_params_schema, request.params);
+    const query = parse_schema(dashboard_prompt_evidence_query_schema, request.query);
+
+    return services.dashboard_service.get_prompt_evidence(
+      request.current_user,
+      params.project_id,
+      params.prompt_id,
       query,
     );
   });

@@ -6,7 +6,10 @@ import {
   DashboardCompetitorsFilters,
   DashboardModelBreakdown,
   DashboardModelsFilters,
+  DashboardPromptEvidenceFilters,
+  DashboardPromptEvidenceResponse,
   DashboardPromptBreakdown,
+  DashboardPromptsFilters,
   DashboardProjectCard,
   DashboardProjectOverview,
   DashboardProjectsFilters,
@@ -41,12 +44,14 @@ export interface DashboardLayerClient {
   get_prompt_breakdown(
     user: AccessActor,
     project_id: string,
-    filters?: {
-      limit?: number;
-      sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
-      sortDirection?: "asc" | "desc";
-    },
+    filters?: DashboardPromptsFilters,
   ): Promise<DashboardPromptBreakdown>;
+  get_prompt_evidence(
+    user: AccessActor,
+    project_id: string,
+    prompt_id: string,
+    filters: DashboardPromptEvidenceFilters,
+  ): Promise<DashboardPromptEvidenceResponse>;
   get_competitor_breakdown(
     user: AccessActor,
     project_id: string,

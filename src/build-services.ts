@@ -87,6 +87,7 @@ export function create_app_services(
   logger?: Pick<FastifyBaseLogger, "info" | "error">,
   structured_logger?: JsonLogger,
 ): AppServices {
+  const promptLibraryTimeoutMs = 75_000;
   const user_repository: UserRepository = new PostgresUserRepository(pool);
   const organization_repository: OrganizationRepository = new PostgresOrganizationRepository(pool);
   const organization_usage_repository: OrganizationUsageRepository =
@@ -98,6 +99,7 @@ export function create_app_services(
       service: "prompt_library",
       base_url: env.PROMPT_LIBRARY_BASE_URL,
       auth_token: env.PROMPT_LIBRARY_AUTH_TOKEN,
+      timeout_ms: promptLibraryTimeoutMs,
       logger,
     }),
   );

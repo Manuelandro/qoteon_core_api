@@ -6,7 +6,10 @@ import {
   DashboardCompetitorsFilters,
   DashboardModelBreakdown,
   DashboardModelsFilters,
+  DashboardPromptEvidenceFilters,
+  DashboardPromptEvidenceResponse,
   DashboardPromptBreakdown,
+  DashboardPromptsFilters,
   DashboardProjectCard,
   DashboardProjectOverview,
   DashboardProjectsFilters,
@@ -80,13 +83,21 @@ export class HttpDashboardLayerClient implements DashboardLayerClient {
   async get_prompt_breakdown(
     user: AccessActor,
     project_id: string,
-    filters?: {
-      limit?: number;
-      sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
-      sortDirection?: "asc" | "desc";
-    },
+    filters?: DashboardPromptsFilters,
   ): Promise<DashboardPromptBreakdown> {
     return this.client.request("GET", `/projects/${project_id}/visibility/prompts`, {
+      query: filters,
+      headers: forwarded_user_headers(user),
+    });
+  }
+
+  async get_prompt_evidence(
+    user: AccessActor,
+    project_id: string,
+    prompt_id: string,
+    filters: DashboardPromptEvidenceFilters,
+  ): Promise<DashboardPromptEvidenceResponse> {
+    return this.client.request("GET", `/projects/${project_id}/visibility/prompts/${prompt_id}/evidence`, {
       query: filters,
       headers: forwarded_user_headers(user),
     });

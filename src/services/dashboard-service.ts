@@ -6,7 +6,10 @@ import {
   DashboardCompetitorsFilters,
   DashboardModelBreakdown,
   DashboardModelsFilters,
+  DashboardPromptEvidenceFilters,
+  DashboardPromptEvidenceResponse,
   DashboardPromptBreakdown,
+  DashboardPromptsFilters,
   DashboardProjectCard,
   DashboardProjectOverview,
   DashboardProjectsFilters,
@@ -78,14 +81,20 @@ export class DashboardService {
   async get_prompt_breakdown(
     user: AccessActor,
     project_id: string,
-    filters?: {
-      limit?: number;
-      sortBy?: "promptText" | "visibilityPercent" | "lastRunAt" | "clusterName" | "intentType" | "sourceType";
-      sortDirection?: "asc" | "desc";
-    },
+    filters?: DashboardPromptsFilters,
   ): Promise<DashboardPromptBreakdown> {
     await this.project_service.assert_project_access(user, project_id);
     return this.dashboard_layer_client.get_prompt_breakdown(user, project_id, filters);
+  }
+
+  async get_prompt_evidence(
+    user: AccessActor,
+    project_id: string,
+    prompt_id: string,
+    filters: DashboardPromptEvidenceFilters,
+  ): Promise<DashboardPromptEvidenceResponse> {
+    await this.project_service.assert_project_access(user, project_id);
+    return this.dashboard_layer_client.get_prompt_evidence(user, project_id, prompt_id, filters);
   }
 
   async get_competitor_breakdown(

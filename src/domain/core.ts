@@ -227,11 +227,36 @@ export interface DashboardCompetitorsFilters extends DashboardBaseFilters {
   sortBy?:
     | "competitorName"
     | "totalMentions"
+    | "totalCitations"
     | "mentionRate"
     | "shareOfVoice"
+    | "visibilityScore"
     | "winsAgainstClientCount"
     | "clientVsCompetitorDelta";
   sortDirection?: "asc" | "desc";
+}
+
+export interface DashboardPromptsFilters extends DashboardBaseFilters {
+  limit?: number;
+  sortBy?:
+    | "promptText"
+    | "visibilityPercent"
+    | "lastRunAt"
+    | "clusterName"
+    | "intentType"
+    | "sourceType"
+    | "mentionCount"
+    | "citationCount";
+  sortDirection?: "asc" | "desc";
+}
+
+export type DashboardPromptEvidenceType = "mentions" | "citations";
+
+export interface DashboardPromptEvidenceFilters {
+  evidenceType: DashboardPromptEvidenceType;
+  startDate?: string;
+  endDate?: string;
+  limit?: number;
 }
 
 export interface DashboardTrendsFilters {
@@ -315,13 +340,21 @@ export interface DashboardClusterComparisonRow {
 }
 
 export interface DashboardCompetitorComparisonRow {
+  entityRole: "client" | "competitor";
+  entityName: string;
+  entityDomain: string | null;
   competitorName: string;
   competitorEntityId: string | null;
   totalMentions: number;
+  totalCitations: number;
+  surfacedExecutionCount: number;
+  visibilityScore: number;
   mentionRate: number;
   shareOfVoice: number;
   promptOverlapCount: number;
+  executionsWithClientCount: number;
   winsAgainstClientCount: number;
+  executionsWithoutClientCount: number;
   clientVsCompetitorDelta: number;
   dominantClusters: string[];
 }
@@ -335,6 +368,8 @@ export interface DashboardPromptVisibilityRow {
   isActive: boolean;
   totalCompletedExecutions: number;
   executionsWithBrandMention: number;
+  mentionCount: number;
+  citationCount: number;
   visibilityPercent: number | null;
   lastRunAt: string | null;
   lastRunBatchId: string | null;
@@ -446,6 +481,39 @@ export interface DashboardPromptBreakdown {
   projectId: string;
   items: DashboardPromptVisibilityRow[];
   summary: DashboardComparisonMetadata;
+}
+
+export interface DashboardPromptEvidenceCitation {
+  citationUrl: string;
+  citationTitle: string | null;
+  citationDomain: string | null;
+  entityRole: "primary_brand" | "competitor" | null;
+  matchedEntityName: string | null;
+}
+
+export interface DashboardPromptEvidenceItem {
+  promptExecutionId: string;
+  runBatchId: string;
+  runType: DashboardRunType;
+  modelName: string;
+  observedAt: string;
+  mentionCount: number;
+  citationCount: number;
+  responseText: string;
+  citations: DashboardPromptEvidenceCitation[];
+  responseSource: "parsing_score_raw_response_text";
+}
+
+export interface DashboardPromptEvidenceResponse {
+  projectId: string;
+  promptId: string;
+  evidenceType: DashboardPromptEvidenceType;
+  items: DashboardPromptEvidenceItem[];
+  summary: {
+    totalItems: number;
+    startDate: string | null;
+    endDate: string | null;
+  };
 }
 
 export interface DashboardTrends {
